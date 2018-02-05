@@ -1,6 +1,85 @@
 Release history
 ###############
 
+Next release
+============
+
+* New signal: ``feed_generated``
+
+3.7.1 (2017-01-10)
+==================
+
+* Fix locale issues in Quickstart script
+* Specify encoding for README and CHANGELOG in setup.py
+
+3.7.0 (2016-12-12)
+==================
+
+* Atom feeds output ``<content>`` in addition to ``<summary>``
+* Atom feeds use ``<published>`` for the original publication date and
+  ``<updated>`` for modifications
+* Simplify Atom feed ID generation and support URL fragments
+* Produce category feeds with category-specific titles
+* RSS feeds now default to summary instead of full content;
+  set ``RSS_FEED_SUMMARY_ONLY = False`` to revert to previous behavior
+* Replace ``MD_EXTENSIONS`` with ``MARKDOWN`` setting
+* Replace ``JINJA_EXTENSIONS`` with more-robust ``JINJA_ENVIRONMENT`` setting
+* Improve summary truncation logic to handle special characters and tags that
+  span multiple lines, using HTML parser instead of regular expressions
+* Include summary when looking for intra-site link substitutions
+* Link to authors and index via ``{author}name`` and ``{index}`` syntax
+* Override widget names via ``LINKS_WIDGET_NAME`` and ``SOCIAL_WIDGET_NAME``
+* Add ``INDEX_SAVE_AS`` option to override default ``index.html`` value
+* Remove ``PAGES`` context variable for themes in favor of ``pages``
+* ``SLUG_SUBSTITUTIONS`` now accepts 3-tuple elements, allowing URL slugs to
+  contain non-alphanumeric characters
+* Tag and category slugs can be controlled with greater precision using the
+  ``TAG_SUBSTITUTIONS`` and ``CATEGORY_SUBSTITUTIONS`` settings
+* Author slugs can be controlled with greater precision using the
+  ``AUTHOR_SUBSTITUTIONS`` setting
+* ``DEFAULT_DATE`` can be defined as a string
+* Use ``mtime`` instead of ``ctime`` when ``DEFAULT_DATE = 'fs'``
+* Add ``--fatal=errors|warnings`` option for use with continuous integration
+* When using generator-level caching, ensure previously-cached files are
+  processed instead of just new files.
+* Add Python and Pelican version information to debug output
+* Improve compatibility with Python 3.5
+* Comply with and enforce PEP8 guidelines
+* Replace tables in settings documentation with ``data::`` directives
+
+3.6.3 (2015-08-14)
+==================
+
+* Fix permissions issue in release tarball
+
+3.6.2 (2015-08-01)
+==================
+
+* Fix installation errors related to Unicode in tests
+* Don't show pagination in ``notmyidea`` theme if there's only one page
+* Make hidden pages available in context
+* Improve URLWrapper comparison
+
+3.6.0 (2015-06-15)
+==================
+
+* Disable caching by default in order to prevent potential confusion
+* Improve caching behavior, replacing ``pickle`` with ``cpickle``
+* Allow Markdown or reST content in metadata fields other than ``summary``
+* Support semicolon-separated author/tag lists
+* Improve flexibility of article sorting
+* Add ``--relative-urls`` argument
+* Support devserver listening on addresses other than localhost
+* Unify HTTP server handlers to ``pelican.server`` throughout
+* Handle intra-site links to draft posts
+* Move ``tag_cloud`` from core to plugin
+* Load default theme's external resources via HTTPS
+* Import drafts from WordPress XML
+* Improve support for Windows users
+* Enhance logging and test suite
+* Clean up and refactor codebase
+* New signals: ``all_generators_finalized`` and ``page_writer_finalized``
+
 3.5.0 (2014-11-04)
 ==================
 
@@ -205,7 +284,7 @@ Release history
 2.5 (2010-11-20)
 ==================
 
-* Import from Wordpress
+* Import from WordPress
 * Added some new themes (martyalchin / wide-notmyidea)
 * First bug report!
 * Linkedin support

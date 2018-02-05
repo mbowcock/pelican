@@ -1,30 +1,51 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals, print_function
-import six
+from __future__ import print_function, unicode_literals
 
 import codecs
+import datetime
 import errno
 import fnmatch
 import locale
 import logging
 import os
-import pytz
 import re
 import shutil
+import sys
 import traceback
-import pickle
-import hashlib
-import datetime
-
 from collections import Hashable
 from contextlib import contextmanager
-import dateutil.parser
 from functools import partial
 from itertools import groupby
-from jinja2 import Markup
 from operator import attrgetter
 
+import dateutil.parser
+
+from jinja2 import Markup
+
+import pytz
+
+import six
+from six.moves import html_entities
+from six.moves.html_parser import HTMLParser
+
+try:
+    from html import escape
+except ImportError:
+    from cgi import escape
+
 logger = logging.getLogger(__name__)
+
+
+def sanitised_join(base_directory, *parts):
+    joined = os.path.abspath(os.path.join(base_directory, *parts))
+    if not joined.startswith(os.path.abspath(base_directory)):
+        raise RuntimeError(
+            "Attempted to break out of output directory to {}".format(
+                joined
+            )
+        )
+
+    return joined
 
 
 def strftime(date, date_format):
@@ -41,9 +62,9 @@ def strftime(date, date_format):
     formatting them with the date, (if necessary) decoding the output and
     replacing formatted output back.
     '''
-
+    def strip_zeros(x):
+        return x.lstrip('0') or '0'
     c89_directives = 'aAbBcdfHIjmMpSUwWxXyYzZ%'
-    strip_zeros = lambda x: x.lstrip('0') or '0'
 
     # grab candidate format options
     format_options = '%[-]?.'
@@ -198,8 +219,8 @@ def deprecated_attribute(old, new, since=None, remove=None, doc=None):
                 ' and will be removed by version {}'.format(version))
         message.append('.  Use {} instead.'.format(new))
         logger.warning(''.join(message))
-        logger.debug(''.join(
-                six.text_type(x) for x in traceback.format_stack()))
+        logger.debug(''.join(six.text_type(x) for x
+                             in traceback.format_stack()))
 
     def fget(self):
         _warn()
@@ -222,7 +243,7 @@ def get_date(string):
     """
     string = re.sub(' +', ' ', string)
     default = SafeDatetime.now().replace(hour=0, minute=0,
-                                        second=0, microsecond=0)
+                                         second=0, microsecond=0)
     try:
         return dateutil.parser.parse(string, default=default)
     except (TypeError, ValueError):
@@ -230,13 +251,15 @@ def get_date(string):
 
 
 @contextmanager
-def pelican_open(filename):
+def pelican_open(filename, mode='rb', strip_crs=(sys.platform == 'win32')):
     """Open a file and return its content"""
 
-    with codecs.open(filename, encoding='utf-8') as infile:
+    with codecs.open(filename, mode, encoding='utf-8') as infile:
         content = infile.read()
-    if content[0] == codecs.BOM_UTF8.decode('utf8'):
+    if content[:1] == codecs.BOM_UTF8.decode('utf8'):
         content = content[1:]
+    if strip_crs:
+        content = content.replace('\r\n', '\n')
     yield content
 
 
@@ -259,60 +282,120 @@ def slugify(value, substitutions=()):
         value = value.decode('ascii')
     # still unicode
     value = unicodedata.normalize('NFKD', value).lower()
-    for src, dst in substitutions:
+
+    # backward compatible covert from 2-tuples to 3-tuples
+    new_subs = []
+    for tpl in substitutions:
+        try:
+            src, dst, skip = tpl
+        except ValueError:
+            src, dst = tpl
+            skip = False
+        new_subs.append((src, dst, skip))
+    substitutions = tuple(new_subs)
+
+    # by default will replace non-alphanum characters
+    replace = True
+    for src, dst, skip in substitutions:
+        orig_value = value
         value = value.replace(src.lower(), dst.lower())
-    value = re.sub('[^\w\s-]', '', value).strip()
-    value = re.sub('[-\s]+', '-', value)
+        # if replacement was made then skip non-alphanum
+        # replacement if instructed to do so
+        if value != orig_value:
+            replace = replace and not skip
+
+    if replace:
+        value = re.sub(r'[^\w\s-]', '', value).strip()
+        value = re.sub(r'[-\s]+', '-', value)
+    else:
+        value = value.strip()
+
     # we want only ASCII chars
     value = value.encode('ascii', 'ignore')
     # but Pelican should generally use only unicode
     return value.decode('ascii')
 
 
-def copy(source, destination):
+def copy(source, destination, ignores=None):
     """Recursively copy source into destination.
 
     If source is a file, destination has to be a file as well.
-
     The function is able to copy either files or directories.
 
     :param source: the source file or directory
     :param destination: the destination file or directory
+    :param ignores: either None, or a list of glob patterns;
+        files matching those patterns will _not_ be copied.
     """
+
+    def walk_error(err):
+        logger.warning("While copying %s: %s: %s",
+                       source_, err.filename, err.strerror)
 
     source_ = os.path.abspath(os.path.expanduser(source))
     destination_ = os.path.abspath(os.path.expanduser(destination))
 
-    if not os.path.exists(destination_) and not os.path.isfile(source_):
-        os.makedirs(destination_)
+    if ignores is None:
+        ignores = []
 
-    def recurse(source, destination):
-        for entry in os.listdir(source):
-            entry_path = os.path.join(source, entry)
-            if os.path.isdir(entry_path):
-                entry_dest = os.path.join(destination, entry)
-                if os.path.exists(entry_dest):
-                    if not os.path.isdir(entry_dest):
-                        raise IOError('Failed to copy {0} a directory.'
-                                      .format(entry_dest))
-                    recurse(entry_path, entry_dest)
-                else:
-                    shutil.copytree(entry_path, entry_dest)
-            else:
-                shutil.copy2(entry_path, destination)
+    if any(fnmatch.fnmatch(os.path.basename(source), ignore)
+           for ignore in ignores):
+        logger.info('Not copying %s due to ignores', source_)
+        return
 
-
-    if os.path.isdir(source_):
-        recurse(source_, destination_)
-
-    elif os.path.isfile(source_):
-        dest_dir = os.path.dirname(destination_)
-        if not os.path.exists(dest_dir):
-            os.makedirs(dest_dir)
-        shutil.copy2(source_, destination_)
+    if os.path.isfile(source_):
+        dst_dir = os.path.dirname(destination_)
+        if not os.path.exists(dst_dir):
+            logger.info('Creating directory %s', dst_dir)
+            os.makedirs(dst_dir)
         logger.info('Copying %s to %s', source_, destination_)
-    else:
-        logger.warning('Skipped copy %s to %s', source_, destination_)
+        copy_file_metadata(source_, destination_)
+
+    elif os.path.isdir(source_):
+        if not os.path.exists(destination_):
+            logger.info('Creating directory %s', destination_)
+            os.makedirs(destination_)
+        if not os.path.isdir(destination_):
+            logger.warning('Cannot copy %s (a directory) to %s (a file)',
+                           source_, destination_)
+            return
+
+        for src_dir, subdirs, others in os.walk(source_):
+            dst_dir = os.path.join(destination_,
+                                   os.path.relpath(src_dir, source_))
+
+            subdirs[:] = (s for s in subdirs if not any(fnmatch.fnmatch(s, i)
+                                                        for i in ignores))
+            others[:] = (o for o in others if not any(fnmatch.fnmatch(o, i)
+                                                      for i in ignores))
+
+            if not os.path.isdir(dst_dir):
+                logger.info('Creating directory %s', dst_dir)
+                # Parent directories are known to exist, so 'mkdir' suffices.
+                os.mkdir(dst_dir)
+
+            for o in others:
+                src_path = os.path.join(src_dir, o)
+                dst_path = os.path.join(dst_dir, o)
+                if os.path.isfile(src_path):
+                    logger.info('Copying %s to %s', src_path, dst_path)
+                    copy_file_metadata(src_path, dst_path)
+                else:
+                    logger.warning('Skipped copy %s (not a file or '
+                                   'directory) to %s',
+                                   src_path, dst_path)
+
+
+def copy_file_metadata(source, destination):
+    '''Copy a file and its metadata (perm bits, access times, ...)'''
+
+    # This function is a workaround for Android python copystat
+    # bug ([issue28141]) https://bugs.python.org/issue28141
+    try:
+        shutil.copy2(source, destination)
+    except OSError as e:
+        logger.warning("A problem occurred copying file %s to %s; %s",
+                       source, destination, e)
 
 
 def clean_output_dir(path, retention):
@@ -340,8 +423,8 @@ def clean_output_dir(path, retention):
                 shutil.rmtree(file)
                 logger.debug("Deleted directory %s", file)
             except Exception as e:
-                logger.error("Unable to delete directory %s; %s", 
-                        file, e)
+                logger.error("Unable to delete directory %s; %s",
+                             file, e)
         elif os.path.isfile(file) or os.path.islink(file):
             try:
                 os.remove(file)
@@ -370,74 +453,164 @@ def path_to_url(path):
         return '/'.join(split_all(path))
 
 
-def truncate_html_words(s, num, end_text='...'):
+def posixize_path(rel_path):
+    """Use '/' as path separator, so that source references,
+    like '{filename}/foo/bar.jpg' or 'extras/favicon.ico',
+    will work on Windows as well as on Mac and Linux."""
+    return rel_path.replace(os.sep, '/')
+
+
+class _HTMLWordTruncator(HTMLParser):
+
+    _word_regex = re.compile(r"\w[\w'-]*", re.U)
+    _word_prefix_regex = re.compile(r'\w', re.U)
+    _singlets = ('br', 'col', 'link', 'base', 'img', 'param', 'area',
+                 'hr', 'input')
+
+    class TruncationCompleted(Exception):
+
+        def __init__(self, truncate_at):
+            super(_HTMLWordTruncator.TruncationCompleted, self).__init__(
+                truncate_at)
+            self.truncate_at = truncate_at
+
+    def __init__(self, max_words):
+        # In Python 2, HTMLParser is not a new-style class,
+        # hence super() cannot be used.
+        try:
+            HTMLParser.__init__(self, convert_charrefs=False)
+        except TypeError:
+            # pre Python 3.3
+            HTMLParser.__init__(self)
+
+        self.max_words = max_words
+        self.words_found = 0
+        self.open_tags = []
+        self.last_word_end = None
+        self.truncate_at = None
+
+    def feed(self, *args, **kwargs):
+        try:
+            # With Python 2, super() cannot be used.
+            # See the comment for __init__().
+            HTMLParser.feed(self, *args, **kwargs)
+        except self.TruncationCompleted as exc:
+            self.truncate_at = exc.truncate_at
+        else:
+            self.truncate_at = None
+
+    def getoffset(self):
+        line_start = 0
+        lineno, line_offset = self.getpos()
+        for i in range(lineno - 1):
+            line_start = self.rawdata.index('\n', line_start) + 1
+        return line_start + line_offset
+
+    def add_word(self, word_end):
+        self.words_found += 1
+        self.last_word_end = None
+        if self.words_found == self.max_words:
+            raise self.TruncationCompleted(word_end)
+
+    def add_last_word(self):
+        if self.last_word_end is not None:
+            self.add_word(self.last_word_end)
+
+    def handle_starttag(self, tag, attrs):
+        self.add_last_word()
+        if tag not in self._singlets:
+            self.open_tags.insert(0, tag)
+
+    def handle_endtag(self, tag):
+        self.add_last_word()
+        try:
+            i = self.open_tags.index(tag)
+        except ValueError:
+            pass
+        else:
+            # SGML: An end tag closes, back to the matching start tag,
+            # all unclosed intervening start tags with omitted end tags
+            del self.open_tags[:i + 1]
+
+    def handle_data(self, data):
+        word_end = 0
+        offset = self.getoffset()
+
+        while self.words_found < self.max_words:
+            match = self._word_regex.search(data, word_end)
+            if not match:
+                break
+
+            if match.start(0) > 0:
+                self.add_last_word()
+
+            word_end = match.end(0)
+            self.last_word_end = offset + word_end
+
+        if word_end < len(data):
+            self.add_last_word()
+
+    def handle_ref(self, char):
+        offset = self.getoffset()
+        ref_end = self.rawdata.index(';', offset) + 1
+
+        if self.last_word_end is None:
+            if self._word_prefix_regex.match(char):
+                self.last_word_end = ref_end
+        else:
+            if self._word_regex.match(char):
+                self.last_word_end = ref_end
+            else:
+                self.add_last_word()
+
+    def handle_entityref(self, name):
+        try:
+            codepoint = html_entities.name2codepoint[name]
+        except KeyError:
+            self.handle_ref('')
+        else:
+            self.handle_ref(six.unichr(codepoint))
+
+    def handle_charref(self, name):
+        if name.startswith('x'):
+            codepoint = int(name[1:], 16)
+        else:
+            codepoint = int(name)
+        self.handle_ref(six.unichr(codepoint))
+
+
+def truncate_html_words(s, num, end_text='…'):
     """Truncates HTML to a certain number of words.
 
     (not counting tags and comments). Closes opened tags if they were correctly
     closed in the given html. Takes an optional argument of what should be used
-    to notify that the string has been truncated, defaulting to ellipsis (...).
+    to notify that the string has been truncated, defaulting to ellipsis (…).
 
     Newlines in the HTML are preserved. (From the django framework).
     """
     length = int(num)
     if length <= 0:
         return ''
-    html4_singlets = ('br', 'col', 'link', 'base', 'img', 'param', 'area',
-                      'hr', 'input')
-
-    # Set up regular expressions
-    re_words = re.compile(r'&.*?;|<.*?>|(\w[\w-]*)', re.U)
-    re_tag = re.compile(r'<(/)?([^ ]+?)(?: (/)| .*?)?>')
-    # Count non-HTML words and keep note of open tags
-    pos = 0
-    end_text_pos = 0
-    words = 0
-    open_tags = []
-    while words <= length:
-        m = re_words.search(s, pos)
-        if not m:
-            # Checked through whole string
-            break
-        pos = m.end(0)
-        if m.group(1):
-            # It's an actual non-HTML word
-            words += 1
-            if words == length:
-                end_text_pos = pos
-            continue
-        # Check for tag
-        tag = re_tag.match(m.group(0))
-        if not tag or end_text_pos:
-            # Don't worry about non tags or tags after our truncate point
-            continue
-        closing_tag, tagname, self_closing = tag.groups()
-        tagname = tagname.lower()  # Element names are always case-insensitive
-        if self_closing or tagname in html4_singlets:
-            pass
-        elif closing_tag:
-            # Check for match in open tags list
-            try:
-                i = open_tags.index(tagname)
-            except ValueError:
-                pass
-            else:
-                # SGML: An end tag closes, back to the matching start tag,
-                # all unclosed intervening start tags with omitted end tags
-                open_tags = open_tags[i + 1:]
-        else:
-            # Add it to the start of the open tags list
-            open_tags.insert(0, tagname)
-    if words <= length:
-        # Don't try to close tags if we don't need to truncate
+    truncator = _HTMLWordTruncator(length)
+    truncator.feed(s)
+    if truncator.truncate_at is None:
         return s
-    out = s[:end_text_pos]
+    out = s[:truncator.truncate_at]
     if end_text:
         out += ' ' + end_text
     # Close any tags still open
-    for tag in open_tags:
+    for tag in truncator.open_tags:
         out += '</%s>' % tag
     # Return string
     return out
+
+
+def escape_html(text, quote=True):
+    """Escape '&', '<' and '>' to HTML-safe sequences.
+
+    In Python 2 this uses cgi.escape and in Python 3 this uses html.escape. We
+    wrap here to ensure the quote argument has an identical default."""
+    return escape(text, quote=quote)
 
 
 def process_translations(content_list, order_by=None):
@@ -464,43 +637,57 @@ def process_translations(content_list, order_by=None):
     index = []
     translations = []
 
+    def _warn_source_paths(msg, items, *extra):
+        args = [len(items)]
+        args.extend(extra)
+        args.extend((x.source_path for x in items))
+        logger.warning('{}: {}'.format(msg, '\n%s' * len(items)), *args)
+
     for slug, items in grouped_by_slugs:
         items = list(items)
-        # items with `translation` metadata will be used as translations…
-        default_lang_items = list(filter(
-                lambda i: i.metadata.get('translation', 'false').lower()
-                        == 'false',
-                items))
-        # …unless all items with that slug are translations
-        if not default_lang_items:
-            default_lang_items = items
+
+        # display warnings if slug is empty
+        if not slug:
+            _warn_source_paths('There are %s items with empty slug', items)
 
         # display warnings if several items have the same lang
         for lang, lang_items in groupby(items, attrgetter('lang')):
             lang_items = list(lang_items)
-            len_ = len(lang_items)
-            if len_ > 1:
-                logger.warning('There are %s variants of "%s" with lang %s',
-                    len_, slug, lang)
-                for x in lang_items:
-                    logger.warning('\t%s', x.source_path)
+            if len(lang_items) > 1:
+                _warn_source_paths(
+                    'There are %s items with slug "%s" with lang %s',
+                    lang_items,
+                    slug,
+                    lang)
+
+        # items with `translation` metadata will be used as translations...
+        candidate_items = list(filter(
+            lambda i:
+                i.metadata.get('translation', 'false').lower() == 'false',
+            items))
+        # ...unless all items with that slug are translations
+        if not candidate_items:
+            logger.warning('All items with slug "%s" are translations', slug)
+            candidate_items = items
 
         # find items with default language
-        default_lang_items = list(filter(attrgetter('in_default_lang'),
-                default_lang_items))
+        original_items = list(filter(
+            attrgetter('in_default_lang'),
+            candidate_items))
 
-        # if there is no article with default language, take an other one
-        if not default_lang_items:
-            default_lang_items = items[:1]
+        # if there is no article with default language, go back one step
+        if not original_items:
+            original_items = candidate_items
 
-        if not slug:
-            logger.warning(
-                    'empty slug for %s. '
-                    'You can fix this by adding a title or a slug to your '
-                    'content',
-                    default_lang_items[0].source_path)
-        index.extend(default_lang_items)
-        translations.extend([x for x in items if x not in default_lang_items])
+        # display warning if there are several original items
+        if len(original_items) > 1:
+            _warn_source_paths(
+                'There are %s original (not translated) items with slug "%s"',
+                original_items,
+                slug)
+
+        index.extend(original_items)
+        translations.extend([x for x in items if x not in original_items])
         for a in items:
             a.translations = [x for x in items if x != a]
 
@@ -509,16 +696,30 @@ def process_translations(content_list, order_by=None):
             try:
                 index.sort(key=order_by)
             except Exception:
-                logger.error('Error sorting with function {}'.format(order_by))
-        elif order_by == 'basename':
-            index.sort(key=lambda x: os.path.basename(x.source_path or ''))
-        elif order_by != 'slug':
-            try:
-                index.sort(key=attrgetter(order_by))
-            except AttributeError:
-                error_msg = ('There is no "{}" attribute in the item metadata.'
-                             'Defaulting to slug order.')
-                logger.warning(error_msg.format(order_by))
+                logger.error('Error sorting with function %s', order_by)
+        elif isinstance(order_by, six.string_types):
+            if order_by.startswith('reversed-'):
+                order_reversed = True
+                order_by = order_by.replace('reversed-', '', 1)
+            else:
+                order_reversed = False
+
+            if order_by == 'basename':
+                index.sort(key=lambda x: os.path.basename(x.source_path or ''),
+                           reverse=order_reversed)
+            # already sorted by slug, no need to sort again
+            elif not (order_by == 'slug' and not order_reversed):
+                try:
+                    index.sort(key=attrgetter(order_by),
+                               reverse=order_reversed)
+                except AttributeError:
+                    logger.warning(
+                        'There is no "%s" attribute in the item '
+                        'metadata. Defaulting to slug order.', order_by)
+        else:
+            logger.warning(
+                'Invalid *_ORDER_BY setting (%s).'
+                'Valid options are strings and functions.', order_by)
 
     return index, translations
 
@@ -532,16 +733,16 @@ def folder_watcher(path, extensions, ignores=[]):
     def file_times(path):
         '''Return `mtime` for each file in path'''
 
-        for root, dirs, files in os.walk(path):
+        for root, dirs, files in os.walk(path, followlinks=True):
             dirs[:] = [x for x in dirs if not x.startswith(os.curdir)]
 
             for f in files:
-                if (f.endswith(tuple(extensions)) and
-                    not any(fnmatch.fnmatch(f, ignore) for ignore in ignores)):
-                    try:
-                        yield os.stat(os.path.join(root, f)).st_mtime
-                    except OSError as e:
-                        logger.warning('Caught Exception: %s', e)
+                if f.endswith(tuple(extensions)) and \
+                   not any(fnmatch.fnmatch(f, ignore) for ignore in ignores):
+                        try:
+                            yield os.stat(os.path.join(root, f)).st_mtime
+                        except OSError as e:
+                            logger.warning('Caught Exception: %s', e)
 
     LAST_MTIME = 0
     while True:
@@ -616,129 +817,6 @@ def split_all(path):
     return components
 
 
-class FileDataCacher(object):
-    '''Class that can cache data contained in files'''
-
-    def __init__(self, settings, cache_name, caching_policy, load_policy):
-        '''Load the specified cache within CACHE_PATH in settings
-
-        only if *load_policy* is True,
-        May use gzip if GZIP_CACHE ins settings is True.
-        Sets caching policy according to *caching_policy*.
-        '''
-        self.settings = settings
-        self._cache_path = os.path.join(self.settings['CACHE_PATH'],
-                                        cache_name)
-        self._cache_data_policy = caching_policy
-        if self.settings['GZIP_CACHE']:
-            import gzip
-            self._cache_open = gzip.open
-        else:
-            self._cache_open = open
-        if load_policy:
-            try:
-                with self._cache_open(self._cache_path, 'rb') as fhandle:
-                    self._cache = pickle.load(fhandle)
-            except (IOError, OSError) as err:
-                logger.debug('Cannot load cache %s (this is normal on first '
-                    'run). Proceeding with empty cache.\n%s',
-                        self._cache_path, err)
-                self._cache = {}
-            except Exception as err:
-                logger.warning(('Cannot unpickle cache %s, cache may be using '
-                    'an incompatible protocol (see pelican caching docs). '
-                    'Proceeding with empty cache.\n%s'),
-                        self._cache_path, err)
-                self._cache = {}
-        else:
-            self._cache = {}
-
-    def cache_data(self, filename, data):
-        '''Cache data for given file'''
-        if self._cache_data_policy:
-            self._cache[filename] = data
-
-    def get_cached_data(self, filename, default=None):
-        '''Get cached data for the given file
-
-        if no data is cached, return the default object
-        '''
-        return self._cache.get(filename, default)
-
-    def save_cache(self):
-        '''Save the updated cache'''
-        if self._cache_data_policy:
-            try:
-                mkdir_p(self.settings['CACHE_PATH'])
-                with self._cache_open(self._cache_path, 'wb') as fhandle:
-                    pickle.dump(self._cache, fhandle)
-            except (IOError, OSError, pickle.PicklingError) as err:
-                logger.warning('Could not save cache %s\n ... %s',
-                    self._cache_path, err)
-
-
-class FileStampDataCacher(FileDataCacher):
-    '''Subclass that also caches the stamp of the file'''
-
-    def __init__(self, settings, cache_name, caching_policy, load_policy):
-        '''This sublcass additionally sets filestamp function
-        and base path for filestamping operations
-        '''
-        super(FileStampDataCacher, self).__init__(settings, cache_name,
-                                                  caching_policy,
-                                                  load_policy)
-
-        method = self.settings['CHECK_MODIFIED_METHOD']
-        if method == 'mtime':
-            self._filestamp_func = os.path.getmtime
-        else:
-            try:
-                hash_func = getattr(hashlib, method)
-                def filestamp_func(filename):
-                    '''return hash of file contents'''
-                    with open(filename, 'rb') as fhandle:
-                        return hash_func(fhandle.read()).digest()
-                self._filestamp_func = filestamp_func
-            except AttributeError as err:
-                logger.warning('Could not get hashing function\n\t%s', err)
-                self._filestamp_func = None
-
-    def cache_data(self, filename, data):
-        '''Cache stamp and data for the given file'''
-        stamp = self._get_file_stamp(filename)
-        super(FileStampDataCacher, self).cache_data(filename, (stamp, data))
-
-    def _get_file_stamp(self, filename):
-        '''Check if the given file has been modified
-        since the previous build.
-
-        depending on CHECK_MODIFIED_METHOD
-        a float may be returned for 'mtime',
-        a hash for a function name in the hashlib module
-        or an empty bytes string otherwise
-        '''
-        try:
-            return self._filestamp_func(filename)
-        except (IOError, OSError, TypeError) as err:
-            logger.warning('Cannot get modification stamp for %s\n\t%s',
-                filename, err)
-            return b''
-
-    def get_cached_data(self, filename, default=None):
-        '''Get the cached data for the given filename
-        if the file has not been modified.
-
-        If no record exists or file has been modified, return default.
-        Modification is checked by comparing the cached
-        and current file stamp.
-        '''
-        stamp, data = super(FileStampDataCacher, self).get_cached_data(
-            filename, (None, default))
-        if stamp != self._get_file_stamp(filename):
-            return default
-        return data
-
-
 def is_selected_for_writing(settings, path):
     '''Check whether path is selected for writing
     according to the WRITE_SELECTED list
@@ -750,4 +828,25 @@ def is_selected_for_writing(settings, path):
         return path in settings['WRITE_SELECTED']
     else:
         return True
-        
+
+
+def path_to_file_url(path):
+    '''Convert file-system path to file:// URL'''
+    return six.moves.urllib_parse.urljoin(
+        "file://", six.moves.urllib.request.pathname2url(path))
+
+
+def maybe_pluralize(count, singular, plural):
+    '''
+    Returns a formatted string containing count and plural if count is not 1
+    Returns count and singular if count is 1
+
+    maybe_pluralize(0, 'Article', 'Articles') -> '0 Articles'
+    maybe_pluralize(1, 'Article', 'Articles') -> '1 Article'
+    maybe_pluralize(2, 'Article', 'Articles') -> '2 Articles'
+
+    '''
+    selection = plural
+    if count == 1:
+        selection = singular
+    return '{} {}'.format(count, selection)

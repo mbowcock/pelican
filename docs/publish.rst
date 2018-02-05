@@ -1,6 +1,8 @@
 Publish your site
 #################
 
+.. _site_generation:
+
 Site generation
 ===============
 
@@ -15,6 +17,18 @@ The above command will generate your site and save it in the ``output/``
 folder, using the default theme to produce a simple site. The default theme
 consists of very simple HTML without styling and is provided so folks may use
 it as a basis for creating their own themes.
+
+When working on a single article or page, it is possible to generate only the
+file that corresponds to that content. To do this, use the ``--write-selected``
+argument, like so::
+
+    pelican --write-selected output/posts/my-post-title.html
+
+Note that you must specify the path to the generated *output* file — not the
+source content. To determine the output file path, use the ``--debug`` flag to
+determine the correct file name and location. If desired, ``--write-selected``
+can take a comma-separated list of paths or can be configured as a setting.
+(See: :ref:`writing_only_selected_content`)
 
 You can also tell Pelican to watch for your modifications, instead of
 manually re-running it every time you want to see your changes. To enable this,
@@ -36,7 +50,7 @@ HTML files directly::
 
 Because the above method may have trouble locating your CSS and other linked
 assets, running a simple web server using Python will often provide a more
-reliable previewing experience. 
+reliable previewing experience.
 
 For Python 2, run::
 
@@ -61,11 +75,20 @@ feeds, etc.) that you may have defined::
 
     pelican content -s publishconf.py
 
+To base your publish configuration on top of your ``pelicanconf.py``, you
+can import your ``pelicanconf`` settings by including the following line in
+your ``publishconf.py``::
+
+    from pelicanconf import *
+
+If you have generated a ``publishconf.py`` using ``pelican-quickstart``,
+this line is included by default.
+
 The steps for deploying your site will depend on where it will be hosted.
 If you have SSH access to a server running Nginx or Apache, you might use the
 ``rsync`` tool to transmit your site files::
 
-    rsync --avc --delete output/ host.example.com:/var/www/your-site/
+    rsync -avc --delete output/ host.example.com:/var/www/your-site/
 
 There are many other deployment options, some of which can be configured when
 first setting up your site via the ``pelican-quickstart`` command. See the
@@ -99,6 +122,18 @@ separately. Use the following command to install Fabric, prefixing with
 ``sudo`` if your environment requires it::
 
     pip install Fabric
+
+.. note:: Installing PyCrypto on Windows
+
+    Fabric depends upon PyCrypto_, which is tricky to install
+    if your system doesn't have a C compiler.
+    For Windows users, before installing Fabric, use
+    ``easy_install http://www.voidspace.org.uk/downloads/pycrypto26/pycrypto-2.6.win32-py2.7.exe``
+    per this `StackOverflow suggestion <http://stackoverflow.com/a/11405769/6364>`_
+    You're more likely to have success
+    with the Win32 versions of Python 2.7 and PyCrypto,
+    than with the Win64—\
+    even if your operating system is a 64-bit version of Windows.
 
 Take a moment to open the ``fabfile.py`` file that was generated in your
 project root. You will see a number of commands, any one of which can be
@@ -139,9 +174,15 @@ and thus doesn't require installing anything else in order to use it. The
 downside is that non-POSIX systems (e.g., Windows) do not include ``make``,
 and installing it on those systems can be a non-trivial task.
 
-If you want to use ``make`` to generate your site, run::
+If you want to use ``make`` to generate your site using the settings in
+``pelicanconf.py``, run::
 
     make html
+
+To generate the site for production, using the settings in ``publishconf.py``,
+run::
+
+    make publish
 
 If you'd prefer to have Pelican automatically regenerate your site every time a
 change is detected (which is handy when testing locally), use the following
@@ -179,3 +220,4 @@ executables, such as ``python3``, you can set the ``PY`` and ``PELICAN``
 environment variables, respectively, to override the default executable names.)
 
 .. _Fabric: http://fabfile.org/
+.. _PyCrypto: http://pycrypto.org

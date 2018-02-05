@@ -1,25 +1,29 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals, absolute_import
+from __future__ import absolute_import, unicode_literals
+
+import locale
+import logging
+import os.path
+from posixpath import join as posix_join
+from sys import platform
+
+from jinja2.utils import generate_lorem_ipsum
 
 import six
-from sys import platform
-import locale
-import os.path
 
-from pelican.tests.support import unittest, get_settings
-
-from pelican.contents import Page, Article, Static, URLWrapper
+from pelican.contents import Article, Author, Category, Page, Static, Tag
 from pelican.settings import DEFAULT_CONFIG
-from pelican.utils import path_to_url, truncate_html_words, SafeDatetime
 from pelican.signals import content_object_init
-from jinja2.utils import generate_lorem_ipsum
+from pelican.tests.support import LoggedTestCase, get_settings, unittest
+from pelican.utils import SafeDatetime, path_to_url, truncate_html_words
+
 
 # generate one paragraph, enclosed with <p>
 TEST_CONTENT = str(generate_lorem_ipsum(n=1))
 TEST_SUMMARY = generate_lorem_ipsum(n=1, html=False)
 
 
-class TestPage(unittest.TestCase):
+class TestPage(LoggedTestCase):
 
     def setUp(self):
         super(TestPage, self).setUp()
@@ -33,20 +37,30 @@ class TestPage(unittest.TestCase):
             'metadata': {
                 'summary': TEST_SUMMARY,
                 'title': 'foo bar',
-                'author': 'Blogger',
+                'author': Author('Blogger', DEFAULT_CONFIG),
             },
             'source_path': '/path/to/file/foo.ext'
         }
+        self._disable_limit_filter()
 
     def tearDown(self):
         locale.setlocale(locale.LC_ALL, self.old_locale)
+        self._enable_limit_filter()
+
+    def _disable_limit_filter(self):
+        from pelican.contents import logger
+        logger.disable_filter()
+
+    def _enable_limit_filter(self):
+        from pelican.contents import logger
+        logger.enable_filter()
 
     def test_use_args(self):
         # Creating a page with arguments passed to the constructor should use
         # them to initialise object's attributes.
         metadata = {'foo': 'bar', 'foobar': 'baz', 'title': 'foobar', }
         page = Page(TEST_CONTENT, metadata=metadata,
-                context={'localsiteurl': ''})
+                    context={'localsiteurl': ''})
         for key, value in metadata.items():
             self.assertTrue(hasattr(page, key))
             self.assertEqual(value, getattr(page, key))
@@ -55,11 +69,13 @@ class TestPage(unittest.TestCase):
     def test_mandatory_properties(self):
         # If the title is not set, must throw an exception.
         page = Page('content')
-        with self.assertRaises(NameError):
-            page.check_properties()
-
+        self.assertFalse(page._has_valid_mandatory_properties())
+        self.assertLogCountEqual(
+                count=1,
+                msg="Skipping .*: could not find information about 'title'",
+                level=logging.ERROR)
         page = Page('content', metadata={'title': 'foobar'})
-        page.check_properties()
+        self.assertTrue(page._has_valid_mandatory_properties())
 
     def test_summary_from_metadata(self):
         # If a :summary: metadata is given, it should be used
@@ -82,6 +98,18 @@ class TestPage(unittest.TestCase):
         settings['SUMMARY_MAX_LENGTH'] = 0
         page = Page(**page_kwargs)
         self.assertEqual(page.summary, '')
+
+    def test_summary_get_summary_warning(self):
+        """calling ._get_summary() should issue a warning"""
+        page_kwargs = self._copy_page_kwargs()
+        page = Page(**page_kwargs)
+        self.assertEqual(page.summary, TEST_SUMMARY)
+        self.assertEqual(page._get_summary(), TEST_SUMMARY)
+        self.assertLogCountEqual(
+                count=1,
+                msg=r"_get_summary\(\) has been deprecated since 3\.6\.4\. "
+                    "Use the summary decorator instead",
+                level=logging.WARNING)
 
     def test_slug(self):
         page_kwargs = self._copy_page_kwargs()
@@ -136,14 +164,9 @@ class TestPage(unittest.TestCase):
         page = Page(**page_kwargs)
 
         # page.locale_date is a unicode string in both python2 and python3
-        dt_date = dt.strftime(DEFAULT_CONFIG['DEFAULT_DATE_FORMAT']) 
-        # dt_date is a byte string in python2, and a unicode string in python3
-        # Let's make sure it is a unicode string (relies on python 3.3 supporting the u prefix)
-        if type(dt_date) != type(u''):
-            # python2:
-            dt_date = unicode(dt_date, 'utf8')
+        dt_date = dt.strftime(DEFAULT_CONFIG['DEFAULT_DATE_FORMAT'])
 
-        self.assertEqual(page.locale_date, dt_date )
+        self.assertEqual(page.locale_date, dt_date)
         page_kwargs['settings'] = get_settings()
 
         # I doubt this can work on all platforms ...
@@ -191,14 +214,19 @@ class TestPage(unittest.TestCase):
         return page_kwargs
 
     def test_signal(self):
-        # If a title is given, it should be used to generate the slug.
-
-        def receiver_test_function(sender, instance):
+        def receiver_test_function(sender):
+            receiver_test_function.has_been_called = True
             pass
+        receiver_test_function.has_been_called = False
 
-        content_object_init.connect(receiver_test_function, sender=Page)
+        content_object_init.connect(receiver_test_function)
+        self.assertIn(
+            receiver_test_function,
+            content_object_init.receivers_for(Page))
+
+        self.assertFalse(receiver_test_function.has_been_called)
         Page(**self.page_kwargs)
-        self.assertTrue(content_object_init.has_receivers_for(Page))
+        self.assertTrue(receiver_test_function.has_been_called)
 
     def test_get_content(self):
         # Test that the content is updated with the relative links to
@@ -212,17 +240,20 @@ class TestPage(unittest.TestCase):
                            '<a href="|tag|tagname">link</a>')
         page = Page(**args)
         content = page.get_content('http://notmyidea.org')
-        self.assertEqual(content, ('A simple test, with a '
-                                   '<a href="tag/tagname.html">link</a>'))
+        self.assertEqual(
+            content,
+            ('A simple test, with a '
+             '<a href="http://notmyidea.org/tag/tagname.html">link</a>'))
 
         # Category
         args['content'] = ('A simple test, with a '
                            '<a href="|category|category">link</a>')
         page = Page(**args)
         content = page.get_content('http://notmyidea.org')
-        self.assertEqual(content,
-                         ('A simple test, with a '
-                          '<a href="category/category.html">link</a>'))
+        self.assertEqual(
+            content,
+            ('A simple test, with a '
+             '<a href="http://notmyidea.org/category/category.html">link</a>'))
 
     def test_intrasite_link(self):
         # type does not take unicode in PY2 and bytes in PY3, which in
@@ -287,6 +318,19 @@ class TestPage(unittest.TestCase):
             '?utm_whatever=234&highlight=word#section-2">link</a>'
         )
 
+        # also test for summary in metadata
+        args['metadata']['summary'] = (
+            'A simple summary test, with a '
+            '<a href="|filename|article.rst">link</a>'
+        )
+        args['context']['localsiteurl'] = 'http://notmyidea.org'
+        p = Page(**args)
+        self.assertEqual(
+            p.summary,
+            'A simple summary test, with a '
+            '<a href="http://notmyidea.org/article.html">link</a>'
+        )
+
     def test_intrasite_link_more(self):
         # type does not take unicode in PY2 and bytes in PY3, which in
         # combination with unicode literals leads to following insane line:
@@ -296,10 +340,14 @@ class TestPage(unittest.TestCase):
         args['settings'] = get_settings()
         args['source_path'] = 'content'
         args['context']['filenames'] = {
-            'images/poster.jpg': type(cls_name, (object,), {'url': 'images/poster.jpg'}),
-            'assets/video.mp4': type(cls_name, (object,), {'url': 'assets/video.mp4'}),
-            'images/graph.svg': type(cls_name, (object,), {'url': 'images/graph.svg'}),
-            'reference.rst': type(cls_name, (object,), {'url': 'reference.html'}),
+            'images/poster.jpg': type(
+                cls_name, (object,), {'url': 'images/poster.jpg'}),
+            'assets/video.mp4': type(
+                cls_name, (object,), {'url': 'assets/video.mp4'}),
+            'images/graph.svg': type(
+                cls_name, (object,), {'url': 'images/graph.svg'}),
+            'reference.rst': type(
+                cls_name, (object,), {'url': 'reference.html'}),
         }
 
         # video.poster
@@ -314,20 +362,25 @@ class TestPage(unittest.TestCase):
             content,
             'There is a video with poster '
             '<video controls poster="http://notmyidea.org/images/poster.jpg">'
-            '<source src="http://notmyidea.org/assets/video.mp4" type="video/mp4">'
+            '<source src="http://notmyidea.org/assets/video.mp4"'
+            ' type="video/mp4">'
             '</video>'
         )
 
         # object.data
         args['content'] = (
             'There is a svg object '
-            '<object data="{filename}/images/graph.svg" type="image/svg+xml"></object>'
+            '<object data="{filename}/images/graph.svg"'
+            ' type="image/svg+xml">'
+            '</object>'
         )
         content = Page(**args).get_content('http://notmyidea.org')
         self.assertEqual(
             content,
             'There is a svg object '
-            '<object data="http://notmyidea.org/images/graph.svg" type="image/svg+xml"></object>'
+            '<object data="http://notmyidea.org/images/graph.svg"'
+            ' type="image/svg+xml">'
+            '</object>'
         )
 
         # blockquote.cite
@@ -339,7 +392,9 @@ class TestPage(unittest.TestCase):
         self.assertEqual(
             content,
             'There is a blockquote with cite attribute '
-            '<blockquote cite="http://notmyidea.org/reference.html">blah blah</blockquote>'
+            '<blockquote cite="http://notmyidea.org/reference.html">'
+            'blah blah'
+            '</blockquote>'
         )
 
     def test_intrasite_link_markdown_spaces(self):
@@ -371,7 +426,8 @@ class TestPage(unittest.TestCase):
         content = Page(**args)
         assert content.authors == [content.author]
         args['metadata'].pop('author')
-        args['metadata']['authors'] = ['First Author', 'Second Author']
+        args['metadata']['authors'] = [Author('First Author', DEFAULT_CONFIG),
+                                       Author('Second Author', DEFAULT_CONFIG)]
         content = Page(**args)
         assert content.authors
         assert content.author == content.authors[0]
@@ -389,23 +445,89 @@ class TestArticle(TestPage):
 
     def test_slugify_category_author(self):
         settings = get_settings()
-        settings['SLUG_SUBSTITUTIONS'] = [ ('C#', 'csharp') ]
+        settings['SLUG_SUBSTITUTIONS'] = [('C#', 'csharp')]
         settings['ARTICLE_URL'] = '{author}/{category}/{slug}/'
         settings['ARTICLE_SAVE_AS'] = '{author}/{category}/{slug}/index.html'
         article_kwargs = self._copy_page_kwargs()
-        article_kwargs['metadata']['author'] = "O'Brien"
-        article_kwargs['metadata']['category'] = 'C# & stuff'
+        article_kwargs['metadata']['author'] = Author("O'Brien", settings)
+        article_kwargs['metadata']['category'] = Category(
+            'C# & stuff', settings)
         article_kwargs['metadata']['title'] = 'fnord'
         article_kwargs['settings'] = settings
         article = Article(**article_kwargs)
         self.assertEqual(article.url, 'obrien/csharp-stuff/fnord/')
-        self.assertEqual(article.save_as, 'obrien/csharp-stuff/fnord/index.html')
+        self.assertEqual(
+            article.save_as, 'obrien/csharp-stuff/fnord/index.html')
+
+    def test_slugify_with_author_substitutions(self):
+        settings = get_settings()
+        settings['AUTHOR_SUBSTITUTIONS'] = [
+                                    ('Alexander Todorov', 'atodorov', False),
+                                    ('Krasimir Tsonev', 'krasimir', False),
+        ]
+        settings['ARTICLE_URL'] = 'blog/{author}/{slug}/'
+        settings['ARTICLE_SAVE_AS'] = 'blog/{author}/{slug}/index.html'
+        article_kwargs = self._copy_page_kwargs()
+        article_kwargs['metadata']['author'] = Author('Alexander Todorov',
+                                                      settings)
+        article_kwargs['metadata']['title'] = 'fnord'
+        article_kwargs['settings'] = settings
+        article = Article(**article_kwargs)
+        self.assertEqual(article.url, 'blog/atodorov/fnord/')
+        self.assertEqual(article.save_as, 'blog/atodorov/fnord/index.html')
+
+    def test_slugify_category_with_dots(self):
+        settings = get_settings()
+        settings['CATEGORY_SUBSTITUTIONS'] = [('Fedora QA', 'fedora.qa', True)]
+        settings['ARTICLE_URL'] = '{category}/{slug}/'
+        article_kwargs = self._copy_page_kwargs()
+        article_kwargs['metadata']['category'] = Category('Fedora QA',
+                                                          settings)
+        article_kwargs['metadata']['title'] = 'This Week in Fedora QA'
+        article_kwargs['settings'] = settings
+        article = Article(**article_kwargs)
+        self.assertEqual(article.url, 'fedora.qa/this-week-in-fedora-qa/')
+
+    def test_slugify_tags_with_dots(self):
+        settings = get_settings()
+        settings['TAG_SUBSTITUTIONS'] = [('Fedora QA', 'fedora.qa', True)]
+        settings['ARTICLE_URL'] = '{tag}/{slug}/'
+        article_kwargs = self._copy_page_kwargs()
+        article_kwargs['metadata']['tag'] = Tag('Fedora QA', settings)
+        article_kwargs['metadata']['title'] = 'This Week in Fedora QA'
+        article_kwargs['settings'] = settings
+        article = Article(**article_kwargs)
+        self.assertEqual(article.url, 'fedora.qa/this-week-in-fedora-qa/')
+
+    def test_valid_save_as_detects_breakout(self):
+        settings = get_settings()
+        article_kwargs = self._copy_page_kwargs()
+        article_kwargs['metadata']['slug'] = '../foo'
+        article_kwargs['settings'] = settings
+        article = Article(**article_kwargs)
+        self.assertFalse(article._has_valid_save_as())
+
+    def test_valid_save_as_detects_breakout_to_root(self):
+        settings = get_settings()
+        article_kwargs = self._copy_page_kwargs()
+        article_kwargs['metadata']['slug'] = '/foo'
+        article_kwargs['settings'] = settings
+        article = Article(**article_kwargs)
+        self.assertFalse(article._has_valid_save_as())
+
+    def test_valid_save_as_passes_valid(self):
+        settings = get_settings()
+        article_kwargs = self._copy_page_kwargs()
+        article_kwargs['metadata']['slug'] = 'foo'
+        article_kwargs['settings'] = settings
+        article = Article(**article_kwargs)
+        self.assertTrue(article._has_valid_save_as())
 
 
-class TestStatic(unittest.TestCase):
+class TestStatic(LoggedTestCase):
 
     def setUp(self):
-
+        super(TestStatic, self).setUp()
         self.settings = get_settings(
             STATIC_SAVE_AS='{path}',
             STATIC_URL='{path}',
@@ -414,7 +536,8 @@ class TestStatic(unittest.TestCase):
         self.context = self.settings.copy()
 
         self.static = Static(content=None, metadata={}, settings=self.settings,
-            source_path=os.path.join('dir', 'foo.jpg'), context=self.context)
+                             source_path=posix_join('dir', 'foo.jpg'),
+                             context=self.context)
 
         self.context['filenames'] = {self.static.source_path: self.static}
 
@@ -424,8 +547,10 @@ class TestStatic(unittest.TestCase):
     def test_attach_to_same_dir(self):
         """attach_to() overrides a static file's save_as and url.
         """
-        page = Page(content="fake page",
-            metadata={'title': 'fakepage'}, settings=self.settings,
+        page = Page(
+            content="fake page",
+            metadata={'title': 'fakepage'},
+            settings=self.settings,
             source_path=os.path.join('dir', 'fakepage.md'))
         self.static.attach_to(page)
 
@@ -437,7 +562,7 @@ class TestStatic(unittest.TestCase):
         """attach_to() preserves dirs inside the linking document dir.
         """
         page = Page(content="fake page", metadata={'title': 'fakepage'},
-            settings=self.settings, source_path='fakepage.md')
+                    settings=self.settings, source_path='fakepage.md')
         self.static.attach_to(page)
 
         expected_save_as = os.path.join('outpages', 'dir', 'foo.jpg')
@@ -448,8 +573,8 @@ class TestStatic(unittest.TestCase):
         """attach_to() ignores dirs outside the linking document dir.
         """
         page = Page(content="fake page",
-            metadata={'title': 'fakepage'}, settings=self.settings,
-            source_path=os.path.join('dir', 'otherdir', 'fakepage.md'))
+                    metadata={'title': 'fakepage'}, settings=self.settings,
+                    source_path=os.path.join('dir', 'otherdir', 'fakepage.md'))
         self.static.attach_to(page)
 
         expected_save_as = os.path.join('outpages', 'foo.jpg')
@@ -460,8 +585,8 @@ class TestStatic(unittest.TestCase):
         """attach_to() does nothing when called a second time.
         """
         page = Page(content="fake page",
-            metadata={'title': 'fakepage'}, settings=self.settings,
-            source_path=os.path.join('dir', 'fakepage.md'))
+                    metadata={'title': 'fakepage'}, settings=self.settings,
+                    source_path=os.path.join('dir', 'fakepage.md'))
 
         self.static.attach_to(page)
 
@@ -469,8 +594,10 @@ class TestStatic(unittest.TestCase):
         otherdir_settings.update(dict(
             PAGE_SAVE_AS=os.path.join('otherpages', '{slug}.html'),
             PAGE_URL='otherpages/{slug}.html'))
-        otherdir_page = Page(content="other page",
-            metadata={'title': 'otherpage'}, settings=otherdir_settings,
+        otherdir_page = Page(
+            content="other page",
+            metadata={'title': 'otherpage'},
+            settings=otherdir_settings,
             source_path=os.path.join('dir', 'otherpage.md'))
 
         self.static.attach_to(otherdir_page)
@@ -485,8 +612,10 @@ class TestStatic(unittest.TestCase):
         """
         original_save_as = self.static.save_as
 
-        page = Page(content="fake page",
-            metadata={'title': 'fakepage'}, settings=self.settings,
+        page = Page(
+            content="fake page",
+            metadata={'title': 'fakepage'},
+            settings=self.settings,
             source_path=os.path.join('dir', 'fakepage.md'))
         self.static.attach_to(page)
 
@@ -499,8 +628,10 @@ class TestStatic(unittest.TestCase):
         """
         original_url = self.static.url
 
-        page = Page(content="fake page",
-            metadata={'title': 'fakepage'}, settings=self.settings,
+        page = Page(
+            content="fake page",
+            metadata={'title': 'fakepage'},
+            settings=self.settings,
             source_path=os.path.join('dir', 'fakepage.md'))
         self.static.attach_to(page)
 
@@ -511,13 +642,15 @@ class TestStatic(unittest.TestCase):
         """attach_to() does not override paths that were overridden elsewhere.
         (For example, by the user with EXTRA_PATH_METADATA)
         """
-        customstatic = Static(content=None,
+        customstatic = Static(
+            content=None,
             metadata=dict(save_as='customfoo.jpg', url='customfoo.jpg'),
             settings=self.settings,
             source_path=os.path.join('dir', 'foo.jpg'),
             context=self.settings.copy())
 
-        page = Page(content="fake page",
+        page = Page(
+            content="fake page",
             metadata={'title': 'fakepage'}, settings=self.settings,
             source_path=os.path.join('dir', 'fakepage.md'))
 
@@ -530,42 +663,134 @@ class TestStatic(unittest.TestCase):
         """{attach} link syntax triggers output path override & url replacement.
         """
         html = '<a href="{attach}../foo.jpg">link</a>'
-        page = Page(content=html,
-            metadata={'title': 'fakepage'}, settings=self.settings,
+        page = Page(
+            content=html,
+            metadata={'title': 'fakepage'},
+            settings=self.settings,
             source_path=os.path.join('dir', 'otherdir', 'fakepage.md'),
             context=self.context)
         content = page.get_content('')
 
-        self.assertNotEqual(content, html,
+        self.assertNotEqual(
+            content, html,
             "{attach} link syntax did not trigger URL replacement.")
 
         expected_save_as = os.path.join('outpages', 'foo.jpg')
         self.assertEqual(self.static.save_as, expected_save_as)
         self.assertEqual(self.static.url, path_to_url(expected_save_as))
 
+    def test_tag_link_syntax(self):
+        "{tag} link syntax triggers url replacement."
 
-class TestURLWrapper(unittest.TestCase):
-    def test_comparisons(self):
-        # URLWrappers are sorted by name
-        wrapper_a = URLWrapper(name='first', settings={})
-        wrapper_b = URLWrapper(name='last', settings={})
-        self.assertFalse(wrapper_a > wrapper_b)
-        self.assertFalse(wrapper_a >= wrapper_b)
-        self.assertFalse(wrapper_a == wrapper_b)
-        self.assertTrue(wrapper_a != wrapper_b)
-        self.assertTrue(wrapper_a <= wrapper_b)
-        self.assertTrue(wrapper_a < wrapper_b)
-        wrapper_b.name = 'first'
-        self.assertFalse(wrapper_a > wrapper_b)
-        self.assertTrue(wrapper_a >= wrapper_b)
-        self.assertTrue(wrapper_a == wrapper_b)
-        self.assertFalse(wrapper_a != wrapper_b)
-        self.assertTrue(wrapper_a <= wrapper_b)
-        self.assertFalse(wrapper_a < wrapper_b)
-        wrapper_a.name = 'last'
-        self.assertTrue(wrapper_a > wrapper_b)
-        self.assertTrue(wrapper_a >= wrapper_b)
-        self.assertFalse(wrapper_a == wrapper_b)
-        self.assertTrue(wrapper_a != wrapper_b)
-        self.assertFalse(wrapper_a <= wrapper_b)
-        self.assertFalse(wrapper_a < wrapper_b)
+        html = '<a href="{tag}foo">link</a>'
+        page = Page(
+            content=html,
+            metadata={'title': 'fakepage'},
+            settings=self.settings,
+            source_path=os.path.join('dir', 'otherdir', 'fakepage.md'),
+            context=self.context)
+        content = page.get_content('')
+
+        self.assertNotEqual(content, html)
+
+    def test_category_link_syntax(self):
+        "{category} link syntax triggers url replacement."
+
+        html = '<a href="{category}foo">link</a>'
+        page = Page(
+            content=html,
+            metadata={'title': 'fakepage'},
+            settings=self.settings,
+            source_path=os.path.join('dir', 'otherdir', 'fakepage.md'),
+            context=self.context)
+        content = page.get_content('')
+
+        self.assertNotEqual(content, html)
+
+    def test_author_link_syntax(self):
+        "{author} link syntax triggers url replacement."
+
+        html = '<a href="{author}foo">link</a>'
+        page = Page(
+            content=html,
+            metadata={'title': 'fakepage'},
+            settings=self.settings,
+            source_path=os.path.join('dir', 'otherdir', 'fakepage.md'),
+            context=self.context)
+        content = page.get_content('')
+
+        self.assertNotEqual(content, html)
+
+    def test_index_link_syntax(self):
+        "{index} link syntax triggers url replacement."
+
+        html = '<a href="{index}">link</a>'
+        page = Page(
+            content=html,
+            metadata={'title': 'fakepage'},
+            settings=self.settings,
+            source_path=os.path.join('dir', 'otherdir', 'fakepage.md'),
+            context=self.context)
+        content = page.get_content('')
+
+        self.assertNotEqual(content, html)
+
+        expected_html = ('<a href="' +
+                         '/'.join((self.settings['SITEURL'],
+                                   self.settings['INDEX_SAVE_AS'])) +
+                         '">link</a>')
+        self.assertEqual(content, expected_html)
+
+    def test_unknown_link_syntax(self):
+        "{unknown} link syntax should trigger warning."
+
+        html = '<a href="{unknown}foo">link</a>'
+        page = Page(content=html,
+                    metadata={'title': 'fakepage'}, settings=self.settings,
+                    source_path=os.path.join('dir', 'otherdir', 'fakepage.md'),
+                    context=self.context)
+        content = page.get_content('')
+
+        self.assertEqual(content, html)
+        self.assertLogCountEqual(
+            count=1,
+            msg="Replacement Indicator 'unknown' not recognized, "
+                "skipping replacement",
+            level=logging.WARNING)
+
+    def test_link_to_unknown_file(self):
+        "{filename} link to unknown file should trigger warning."
+
+        html = '<a href="{filename}foo">link</a>'
+        page = Page(content=html,
+                    metadata={'title': 'fakepage'}, settings=self.settings,
+                    source_path=os.path.join('dir', 'otherdir', 'fakepage.md'),
+                    context=self.context)
+        content = page.get_content('')
+
+        self.assertEqual(content, html)
+        self.assertLogCountEqual(
+            count=1,
+            msg="Unable to find 'foo', skipping url replacement.",
+            level=logging.WARNING)
+
+    def test_index_link_syntax_with_spaces(self):
+        """{index} link syntax triggers url replacement
+        with spaces around the equal sign."""
+
+        html = '<a href = "{index}">link</a>'
+        page = Page(
+            content=html,
+            metadata={'title': 'fakepage'},
+            settings=self.settings,
+            source_path=os.path.join('dir', 'otherdir', 'fakepage.md'),
+            context=self.context)
+        content = page.get_content('')
+
+        self.assertNotEqual(content, html)
+
+        expected_html = ('<a href = "' +
+                         '/'.join((self.settings['SITEURL'],
+                                   self.settings['INDEX_SAVE_AS'])) +
+                         '">link</a>')
+        self.assertEqual(content, expected_html)

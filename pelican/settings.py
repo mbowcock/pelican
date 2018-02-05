@@ -1,29 +1,31 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals, print_function
-import six
+from __future__ import print_function, unicode_literals
 
 import copy
 import inspect
-import os
 import locale
 import logging
-
-try:
-    # SourceFileLoader is the recommended way in 3.3+
-    from importlib.machinery import SourceFileLoader
-    load_source = lambda name, path: SourceFileLoader(name, path).load_module()
-except ImportError:
-    # but it does not exist in 3.2-, so fall back to imp
-    import imp
-    load_source = imp.load_source
-
+import os
 from os.path import isabs
+from posixpath import join as posix_join
+
+import six
 
 from pelican.log import LimitFilter
 
+try:
+    # SourceFileLoader is the recommended way in Python 3.3+
+    from importlib.machinery import SourceFileLoader
+
+    def load_source(name, path):
+        return SourceFileLoader(name, path).load_module()
+except ImportError:
+    # but it does not exist in Python 2.7, so fall back to imp
+    import imp
+    load_source = imp.load_source
+
 
 logger = logging.getLogger(__name__)
-
 
 DEFAULT_THEME = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              'themes', 'notmyidea')
@@ -41,12 +43,13 @@ DEFAULT_CONFIG = {
     'STATIC_EXCLUDE_SOURCES': True,
     'THEME_STATIC_DIR': 'theme',
     'THEME_STATIC_PATHS': ['static', ],
-    'FEED_ALL_ATOM': os.path.join('feeds', 'all.atom.xml'),
-    'CATEGORY_FEED_ATOM': os.path.join('feeds', '%s.atom.xml'),
-    'AUTHOR_FEED_ATOM': os.path.join('feeds', '%s.atom.xml'),
-    'AUTHOR_FEED_RSS': os.path.join('feeds', '%s.rss.xml'),
-    'TRANSLATION_FEED_ATOM': os.path.join('feeds', 'all-%s.atom.xml'),
+    'FEED_ALL_ATOM': posix_join('feeds', 'all.atom.xml'),
+    'CATEGORY_FEED_ATOM': posix_join('feeds', '%s.atom.xml'),
+    'AUTHOR_FEED_ATOM': posix_join('feeds', '%s.atom.xml'),
+    'AUTHOR_FEED_RSS': posix_join('feeds', '%s.rss.xml'),
+    'TRANSLATION_FEED_ATOM': posix_join('feeds', 'all-%s.atom.xml'),
     'FEED_MAX_ITEMS': '',
+    'RSS_FEED_SUMMARY_ONLY': True,
     'SITEURL': '',
     'SITENAME': 'A Pelican Blog',
     'DISPLAY_PAGES_ON_MENU': True,
@@ -61,32 +64,32 @@ DEFAULT_CONFIG = {
     'NEWEST_FIRST_ARCHIVES': True,
     'REVERSE_CATEGORY_ORDER': False,
     'DELETE_OUTPUT_DIRECTORY': False,
-    'OUTPUT_RETENTION': (),
+    'OUTPUT_RETENTION': [],
+    'INDEX_SAVE_AS': 'index.html',
     'ARTICLE_URL': '{slug}.html',
     'ARTICLE_SAVE_AS': '{slug}.html',
-    'ARTICLE_ORDER_BY': 'slug',
+    'ARTICLE_ORDER_BY': 'reversed-date',
     'ARTICLE_LANG_URL': '{slug}-{lang}.html',
     'ARTICLE_LANG_SAVE_AS': '{slug}-{lang}.html',
     'DRAFT_URL': 'drafts/{slug}.html',
-    'DRAFT_SAVE_AS': os.path.join('drafts', '{slug}.html'),
+    'DRAFT_SAVE_AS': posix_join('drafts', '{slug}.html'),
     'DRAFT_LANG_URL': 'drafts/{slug}-{lang}.html',
-    'DRAFT_LANG_SAVE_AS': os.path.join('drafts', '{slug}-{lang}.html'),
+    'DRAFT_LANG_SAVE_AS': posix_join('drafts', '{slug}-{lang}.html'),
     'PAGE_URL': 'pages/{slug}.html',
-    'PAGE_SAVE_AS': os.path.join('pages', '{slug}.html'),
+    'PAGE_SAVE_AS': posix_join('pages', '{slug}.html'),
     'PAGE_ORDER_BY': 'basename',
     'PAGE_LANG_URL': 'pages/{slug}-{lang}.html',
-    'PAGE_LANG_SAVE_AS': os.path.join('pages', '{slug}-{lang}.html'),
+    'PAGE_LANG_SAVE_AS': posix_join('pages', '{slug}-{lang}.html'),
     'STATIC_URL': '{path}',
     'STATIC_SAVE_AS': '{path}',
-    'PDF_GENERATOR': False,
-    'PDF_STYLE_PATH': '',
-    'PDF_STYLE': 'twelvepoint',
+    'STATIC_CREATE_LINKS': False,
+    'STATIC_CHECK_IF_MODIFIED': False,
     'CATEGORY_URL': 'category/{slug}.html',
-    'CATEGORY_SAVE_AS': os.path.join('category', '{slug}.html'),
+    'CATEGORY_SAVE_AS': posix_join('category', '{slug}.html'),
     'TAG_URL': 'tag/{slug}.html',
-    'TAG_SAVE_AS': os.path.join('tag', '{slug}.html'),
+    'TAG_SAVE_AS': posix_join('tag', '{slug}.html'),
     'AUTHOR_URL': 'author/{slug}.html',
-    'AUTHOR_SAVE_AS': os.path.join('author', '{slug}.html'),
+    'AUTHOR_SAVE_AS': posix_join('author', '{slug}.html'),
     'PAGINATION_PATTERNS': [
         (0, '{name}{number}{extension}', '{name}{number}{extension}'),
     ],
@@ -95,26 +98,34 @@ DEFAULT_CONFIG = {
     'DAY_ARCHIVE_SAVE_AS': '',
     'RELATIVE_URLS': False,
     'DEFAULT_LANG': 'en',
-    'TAG_CLOUD_STEPS': 4,
-    'TAG_CLOUD_MAX_ITEMS': 100,
-    'DIRECT_TEMPLATES': ('index', 'tags', 'categories', 'authors', 'archives'),
+    'DIRECT_TEMPLATES': ['index', 'tags', 'categories', 'authors', 'archives'],
     'EXTRA_TEMPLATES_PATHS': [],
-    'PAGINATED_DIRECT_TEMPLATES': ('index', ),
+    'PAGINATED_DIRECT_TEMPLATES': ['index'],
     'PELICAN_CLASS': 'pelican.Pelican',
     'DEFAULT_DATE_FORMAT': '%a %d %B %Y',
     'DATE_FORMATS': {},
-    'MD_EXTENSIONS': ['codehilite(css_class=highlight)', 'extra'],
-    'JINJA_EXTENSIONS': [],
+    'MARKDOWN': {
+        'extension_configs': {
+            'markdown.extensions.codehilite': {'css_class': 'highlight'},
+            'markdown.extensions.extra': {},
+            'markdown.extensions.meta': {},
+        },
+        'output_format': 'html5',
+    },
     'JINJA_FILTERS': {},
+    'JINJA_ENVIRONMENT': {
+        'trim_blocks': True,
+        'lstrip_blocks': True,
+        'extensions': [],
+    },
     'LOG_FILTER': [],
     'LOCALE': [''],  # defaults to user locale
     'DEFAULT_PAGINATION': False,
     'DEFAULT_ORPHANS': 0,
-    'DEFAULT_METADATA': (),
-    'FILENAME_METADATA': '(?P<date>\d{4}-\d{2}-\d{2}).*',
+    'DEFAULT_METADATA': {},
+    'FILENAME_METADATA': r'(?P<date>\d{4}-\d{2}-\d{2}).*',
     'PATH_METADATA': '',
     'EXTRA_PATH_METADATA': {},
-    'DEFAULT_STATUS': 'published',
     'ARTICLE_PERMALINK_STRUCTURE': '',
     'TYPOGRIFY': False,
     'TYPOGRIFY_IGNORE_TAGS': [],
@@ -127,15 +138,15 @@ DEFAULT_CONFIG = {
     'SLUG_SUBSTITUTIONS': (),
     'INTRASITE_LINK_REGEX': '[{|](?P<what>.*?)[|}]',
     'SLUGIFY_SOURCE': 'title',
-    'CACHE_CONTENT': True,
+    'CACHE_CONTENT': False,
     'CONTENT_CACHING_LAYER': 'reader',
     'CACHE_PATH': 'cache',
     'GZIP_CACHE': True,
     'CHECK_MODIFIED_METHOD': 'mtime',
-    'LOAD_CONTENT_CACHE': True,
-    'AUTORELOAD_IGNORE_CACHE': False,
+    'LOAD_CONTENT_CACHE': False,
     'WRITE_SELECTED': [],
-    }
+    'FORMATTED_FIELDS': ['summary'],
+}
 
 PYGMENTS_RST_OPTIONS = None
 
@@ -149,7 +160,7 @@ def read_settings(path=None, override=None):
                     and not isabs(local_settings[p]):
                 absp = os.path.abspath(os.path.normpath(os.path.join(
                     os.path.dirname(path), local_settings[p])))
-                if p not in ('THEME') or os.path.exists(absp):
+                if p != 'THEME' or os.path.exists(absp):
                     local_settings[p] = absp
 
         if 'PLUGIN_PATH' in local_settings:
@@ -157,13 +168,31 @@ def read_settings(path=None, override=None):
                            'PLUGIN_PATHS, moving it to the new setting name.')
             local_settings['PLUGIN_PATHS'] = local_settings['PLUGIN_PATH']
             del local_settings['PLUGIN_PATH']
+        if 'JINJA_EXTENSIONS' in local_settings:
+            logger.warning('JINJA_EXTENSIONS setting has been deprecated, '
+                           'moving it to JINJA_ENVIRONMENT setting.')
+            local_settings['JINJA_ENVIRONMENT']['extensions'] = \
+                local_settings['JINJA_EXTENSIONS']
+            del local_settings['JINJA_EXTENSIONS']
         if isinstance(local_settings['PLUGIN_PATHS'], six.string_types):
             logger.warning("Defining PLUGIN_PATHS setting as string "
                            "has been deprecated (should be a list)")
             local_settings['PLUGIN_PATHS'] = [local_settings['PLUGIN_PATHS']]
         elif local_settings['PLUGIN_PATHS'] is not None:
-                local_settings['PLUGIN_PATHS'] = [os.path.abspath(os.path.normpath(os.path.join(os.path.dirname(path), pluginpath)))
-                                    if not isabs(pluginpath) else pluginpath for pluginpath in local_settings['PLUGIN_PATHS']]
+            def getabs(path, pluginpath):
+                if isabs(pluginpath):
+                    return pluginpath
+                else:
+                    path_dirname = os.path.dirname(path)
+                    path_joined = os.path.join(path_dirname, pluginpath)
+                    path_normed = os.path.normpath(path_joined)
+                    path_absolute = os.path.abspath(path_normed)
+                    return path_absolute
+
+            pluginpath_list = [getabs(path, pluginpath)
+                               for pluginpath
+                               in local_settings['PLUGIN_PATHS']]
+            local_settings['PLUGIN_PATHS'] = pluginpath_list
     else:
         local_settings = copy.deepcopy(DEFAULT_CONFIG)
 
@@ -198,18 +227,32 @@ def get_settings_from_file(path, default_settings=DEFAULT_CONFIG):
     return get_settings_from_module(module, default_settings=default_settings)
 
 
+def get_jinja_environment(settings):
+    """Sets the environment for Jinja"""
+
+    jinja_env = settings.setdefault('JINJA_ENVIRONMENT',
+                                    DEFAULT_CONFIG['JINJA_ENVIRONMENT'])
+
+    # Make sure we include the defaults if the user has set env variables
+    for key, value in DEFAULT_CONFIG['JINJA_ENVIRONMENT'].items():
+        if key not in jinja_env:
+            jinja_env[key] = value
+
+    return settings
+
+
 def configure_settings(settings):
     """Provide optimizations, error checking, and warnings for the given
     settings.
     Also, specify the log messages to be ignored.
     """
-    if not 'PATH' in settings or not os.path.isdir(settings['PATH']):
+    if 'PATH' not in settings or not os.path.isdir(settings['PATH']):
         raise Exception('You need to specify a path containing the content'
                         ' (see pelican --help for more information)')
 
     # specify the log messages to be ignored
-    LimitFilter._ignore.update(set(settings.get('LOG_FILTER',
-                                               DEFAULT_CONFIG['LOG_FILTER'])))
+    log_filter = settings.get('LOG_FILTER', DEFAULT_CONFIG['LOG_FILTER'])
+    LimitFilter._ignore.update(set(log_filter))
 
     # lookup the theme in "pelican/themes" if the given one doesn't exist
     if not os.path.isdir(settings['THEME']):
@@ -227,19 +270,18 @@ def configure_settings(settings):
     settings['WRITE_SELECTED'] = [
         os.path.abspath(path) for path in
         settings.get('WRITE_SELECTED', DEFAULT_CONFIG['WRITE_SELECTED'])
-        ]
+    ]
 
     # standardize strings to lowercase strings
-    for key in [
-            'DEFAULT_LANG',
-            ]:
+    for key in ['DEFAULT_LANG']:
         if key in settings:
             settings[key] = settings[key].lower()
 
+    # set defaults for Jinja environment
+    settings = get_jinja_environment(settings)
+
     # standardize strings to lists
-    for key in [
-            'LOCALE',
-            ]:
+    for key in ['LOCALE']:
         if key in settings and isinstance(settings[key], six.string_types):
             settings[key] = [settings[key]]
 
@@ -247,12 +289,13 @@ def configure_settings(settings):
     for key, types in [
             ('OUTPUT_SOURCES_EXTENSION', six.string_types),
             ('FILENAME_METADATA', six.string_types),
-            ]:
+    ]:
         if key in settings and not isinstance(settings[key], types):
             value = settings.pop(key)
-            logger.warn('Detected misconfigured %s (%s), '
-                        'falling back to the default (%s)',
-                    key, value, DEFAULT_CONFIG[key])
+            logger.warn(
+                'Detected misconfigured %s (%s), '
+                'falling back to the default (%s)',
+                key, value, DEFAULT_CONFIG[key])
 
     # try to set the different locales, fallback on the default.
     locales = settings.get('LOCALE', DEFAULT_CONFIG['LOCALE'])
@@ -264,7 +307,9 @@ def configure_settings(settings):
         except locale.Error:
             pass
     else:
-        logger.warning("LOCALE option doesn't contain a correct value")
+        logger.warning(
+            "Locale could not be set. Check the LOCALE setting, ensuring it "
+            "is valid and available on your system.")
 
     if ('SITEURL' in settings):
         # If SITEURL has a trailing slash, remove it and provide a warning
@@ -274,16 +319,16 @@ def configure_settings(settings):
             logger.warning("Removed extraneous trailing slash from SITEURL.")
         # If SITEURL is defined but FEED_DOMAIN isn't,
         # set FEED_DOMAIN to SITEURL
-        if not 'FEED_DOMAIN' in settings:
+        if 'FEED_DOMAIN' not in settings:
             settings['FEED_DOMAIN'] = settings['SITEURL']
 
     # check content caching layer and warn of incompatibilities
-    if (settings.get('CACHE_CONTENT', False) and
-        settings.get('CONTENT_CACHING_LAYER', '') == 'generator' and
-        settings.get('WITH_FUTURE_DATES', DEFAULT_CONFIG['WITH_FUTURE_DATES'])):
-        logger.warning('WITH_FUTURE_DATES conflicts with '
-                        "CONTENT_CACHING_LAYER set to 'generator', "
-                        "use 'reader' layer instead")
+    if settings.get('CACHE_CONTENT', False) and \
+       settings.get('CONTENT_CACHING_LAYER', '') == 'generator' and \
+       settings.get('WITH_FUTURE_DATES', False):
+            logger.warning(
+                "WITH_FUTURE_DATES conflicts with CONTENT_CACHING_LAYER "
+                "set to 'generator', use 'reader' layer instead")
 
     # Warn if feeds are generated with both SITEURL & FEED_DOMAIN undefined
     feed_keys = [
@@ -300,7 +345,7 @@ def configure_settings(settings):
             logger.warning('Feeds generated without SITEURL set properly may'
                            ' not be valid')
 
-    if not 'TIMEZONE' in settings:
+    if 'TIMEZONE' not in settings:
         logger.warning(
             'No timezone information specified in the settings. Assuming'
             ' your timezone is UTC for feed generation. Check '
@@ -325,7 +370,8 @@ def configure_settings(settings):
         old_key = key + '_DIR'
         new_key = key + '_PATHS'
         if old_key in settings:
-            logger.warning('Deprecated setting %s, moving it to %s list',
+            logger.warning(
+                'Deprecated setting %s, moving it to %s list',
                 old_key, new_key)
             settings[new_key] = [settings[old_key]]   # also make a list
             del settings[old_key]
@@ -338,7 +384,6 @@ def configure_settings(settings):
         'EXTRA_TEMPLATES_PATHS',
         'FILES_TO_COPY',
         'IGNORE_FILES',
-        'JINJA_EXTENSIONS',
         'PAGINATED_DIRECT_TEMPLATES',
         'PLUGINS',
         'STATIC_EXCLUDES',
@@ -353,6 +398,12 @@ def configure_settings(settings):
                            "(must be a list), falling back to the default",
                            PATH_KEY)
             settings[PATH_KEY] = DEFAULT_CONFIG[PATH_KEY]
+
+    # Deprecated warning of MD_EXTENSIONS
+    if 'MD_EXTENSIONS' in settings:
+        logger.warning('MD_EXTENSIONS is deprecated use MARKDOWN '
+                       'instead. Falling back to the default.')
+        settings['MARKDOWN'] = DEFAULT_CONFIG['MARKDOWN']
 
     # Add {PAGE,ARTICLE}_PATHS to {ARTICLE,PAGE}_EXCLUDES
     mutually_exclusive = ('ARTICLE', 'PAGE')
@@ -369,8 +420,9 @@ def configure_settings(settings):
     for old, new, doc in [
             ('LESS_GENERATOR', 'the Webassets plugin', None),
             ('FILES_TO_COPY', 'STATIC_PATHS and EXTRA_PATH_METADATA',
-             'https://github.com/getpelican/pelican/blob/master/docs/settings.rst#path-metadata'),
-            ]:
+                'https://github.com/getpelican/pelican/'
+                'blob/master/docs/settings.rst#path-metadata'),
+    ]:
         if old in settings:
             message = 'The {} setting has been removed in favor of {}'.format(
                 old, new)

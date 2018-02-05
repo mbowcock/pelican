@@ -11,6 +11,8 @@ The idea behind "pages" is that they are usually not temporal in nature and are
 used for content that does not change very often (e.g., "About" or "Contact"
 pages).
 
+You can find sample content in the repository at: ``pelican/samples/content/``
+
 .. _internal_metadata:
 
 File metadata
@@ -35,6 +37,12 @@ this metadata in text files via the following syntax (give your file the
     :authors: Alexis Metaireau, Conan Doyle
     :summary: Short version for index and feeds
 
+Author and tag lists may be semicolon-separated instead, which allows
+you to write authors and tags containing commas::
+
+    :tags: pelican, publishing tool; pelican, bird
+    :authors: Metaireau, Alexis; Doyle, Conan
+
 Pelican implements an extension to reStructuredText to enable support for the
 ``abbr`` HTML tag. To use it, write something like this in your post::
 
@@ -47,7 +55,7 @@ install Markdown``.
 
 Pelican also supports `Markdown Extensions`_, which might have to be installed
 separately if they are not included in the default ``Markdown`` package and can
-be configured and loaded via the ``MD_EXTENSIONS`` setting.
+be configured and loaded via the ``MARKDOWN`` setting.
 
 Metadata syntax for Markdown posts should follow this pattern::
 
@@ -85,13 +93,13 @@ interprets the HTML in a very straightforward manner, reading metadata from
         </body>
     </html>
 
-With HTML, there is one simple exception to the standard metadata: ``tags`` can
-be specified either via the ``tags`` metadata, as is standard in Pelican, or
-via the ``keywords`` metadata, as is standard in HTML. The two can be used
+With HTML, there is one simple exception to the standard metadata: tags can be
+specified either via the ``tags`` metadata, as is standard in Pelican, or via
+the ``keywords`` metadata, as is standard in HTML. The two can be used
 interchangeably.
 
 Note that, aside from the title, none of this article metadata is mandatory:
-if the date is not specified and ``DEFAULT_DATE`` is set to ``fs``, Pelican
+if the date is not specified and ``DEFAULT_DATE`` is set to ``'fs'``, Pelican
 will rely on the file's "mtime" timestamp, and the category can be determined
 by the directory in which the file resides. For example, a file located at
 ``python/foobar/myfoobar.rst`` will have a category of ``foobar``. If you would
@@ -157,6 +165,9 @@ the other content will be placed after site generation).
 
 To link to internal content (files in the ``content`` directory), use the
 following syntax for the link target: ``{filename}path/to/file``
+Note: forward slashes, ``/``,
+are the required path separator in the ``{filename}`` directive
+on all operating systems, including Windows.
 
 For example, a Pelican project might be structured like this::
 
@@ -320,11 +331,11 @@ of ``{attach}``, and letting the file's location be determined by the project's
 ``STATIC_SAVE_AS`` and ``STATIC_URL`` settings. (Per-file ``save_as`` and
 ``url`` overrides can still be set in ``EXTRA_PATH_METADATA``.)
 
-Linking to tags and categories
-------------------------------
+Linking to authors, categories, index and tags
+----------------------------------------------
 
-You can link to tags and categories using the ``{tag}tagname`` and
-``{category}foobar`` syntax.
+You can link to authors, categories, index and tags using the ``{author}name``,
+``{category}foobar``, ``{index}`` and ``{tag}tagname`` syntax.
 
 Deprecated internal link syntax
 -------------------------------
@@ -411,22 +422,29 @@ which posts are translations::
 Syntax highlighting
 ===================
 
-Pelican is able to provide colorized syntax highlighting for your code blocks.
-To do so, you have to use the following conventions inside your content files.
+Pelican can provide colorized syntax highlighting for your code blocks.
+To do so, you must use the following conventions inside your content files.
 
-For reStructuredText, use the code-block directive::
+For reStructuredText, use the ``code-block`` directive to specify the type
+of code to be highlighted (in these examples, we'll use ``python``)::
 
-    .. code-block:: identifier
+    .. code-block:: python
 
-       <indented code block goes here>
+       print("Pelican is a static site generator.")
 
-For Markdown, include the language identifier just above the code block,
-indenting both the identifier and code::
+For Markdown, which utilizes the `CodeHilite extension`_ to provide syntax
+highlighting, include the language identifier just above the code block,
+indenting both the identifier and the code::
 
-    A block of text.
+    There are two ways to specify the identifier:
 
-        :::identifier
-        <code goes here>
+        :::python
+        print("The triple-colon syntax will *not* show line numbers.")
+
+    To display line numbers, use a path-less shebang instead of colons:
+
+        #!python
+        print("The path-less shebang syntax *will* show line numbers.")
 
 The specified identifier (e.g. ``python``, ``ruby``) should be one that
 appears on the `list of available lexers <http://pygments.org/docs/lexers/>`_.
@@ -439,7 +457,13 @@ Option          Valid values  Description
 =============   ============  =========================================
 anchorlinenos   N/A           If present wrap line numbers in <a> tags.
 classprefix     string        String to prepend to token class names
-hl_lines        numbers       List of lines to be highlighted.
+hl_lines        numbers       List of lines to be highlighted, where
+                              line numbers to highlight are separated
+                              by a space. This is similar to
+                              ``emphasize-lines`` in Sphinx, but it
+                              does not support a range of line numbers
+                              separated by a hyphen, or comma-separated
+                              line numbers.
 lineanchors     string        Wrap each line in an anchor using this
                               string and -linenumber.
 linenos         string        If present or set to "table" output line
@@ -498,8 +522,19 @@ publishing, for example), you can add a ``Status: draft`` attribute to its
 metadata. That article will then be output to the ``drafts`` folder and not
 listed on the index page nor on any category or tag page.
 
+If your articles should be automatically published as a draft (to not accidentally
+publish an article before it is finished) include the status in the ``DEFAULT_METADATA``::
+
+    DEFAULT_METADATA = {
+        'status': 'draft',
+    }
+
+To publish a post when the default status is ``draft``, update the post's
+metadata to include ``Status: published``.
+
 .. _W3C ISO 8601: http://www.w3.org/TR/NOTE-datetime
 .. _AsciiDoc: http://www.methods.co.nz/asciidoc/
 .. _pelican-plugins: http://github.com/getpelican/pelican-plugins
 .. _Markdown Extensions: http://pythonhosted.org/Markdown/extensions/
+.. _CodeHilite extension: http://pythonhosted.org/Markdown/extensions/code_hilite.html#syntax
 .. _i18n_subsites plugin: http://github.com/getpelican/pelican-plugins/tree/master/i18n_subsites

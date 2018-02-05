@@ -1,20 +1,24 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals, print_function, absolute_import
-import logging
-import shutil
-import os
-import time
+from __future__ import absolute_import, print_function, unicode_literals
+
 import locale
-from sys import platform, version_info
+import logging
+import os
+import shutil
+import time
+from sys import platform
 from tempfile import mkdtemp
 
 import pytz
 
-from pelican.generators import TemplatePagesGenerator
-from pelican.writers import Writer
-from pelican.settings import read_settings
+import six
+
 from pelican import utils
-from pelican.tests.support import get_article, LoggedTestCase, locale_available, unittest
+from pelican.generators import TemplatePagesGenerator
+from pelican.settings import read_settings
+from pelican.tests.support import (LoggedTestCase, get_article,
+                                   locale_available, unittest)
+from pelican.writers import Writer
 
 
 class TestUtils(LoggedTestCase):
@@ -72,7 +76,7 @@ class TestUtils(LoggedTestCase):
             '2012-11-22T22:11:10Z': date_hour_sec_z,
             '2012-11-22T22:11:10-0500': date_hour_sec_est,
             '2012-11-22T22:11:10.123Z': date_hour_sec_frac_z,
-            }
+        }
 
         # examples from http://www.w3.org/TR/NOTE-datetime
         iso_8601_date = utils.SafeDatetime(year=1997, month=7, day=16)
@@ -94,7 +98,6 @@ class TestUtils(LoggedTestCase):
 
         # invalid ones
         invalid_dates = ['2010-110-12', 'yay']
-
 
         for value, expected in dates.items():
             self.assertEqual(utils.get_date(value), expected, value)
@@ -130,6 +133,18 @@ class TestUtils(LoggedTestCase):
         for value, expected in samples:
             self.assertEqual(utils.slugify(value, subs), expected)
 
+    def test_slugify_substitute_and_keeping_non_alphanum(self):
+
+        samples = (('Fedora QA', 'fedora.qa'),
+                   ('C++ is used by Fedora QA', 'cpp is used by fedora.qa'),
+                   ('C++ is based on C', 'cpp-is-based-on-c'),
+                   ('C+++ test C+ test', 'cpp-test-c-test'),)
+
+        subs = (('Fedora QA', 'fedora.qa', True),
+                ('c++', 'cpp'),)
+        for value, expected in samples:
+            self.assertEqual(utils.slugify(value, subs), expected)
+
     def test_get_relative_path(self):
 
         samples = ((os.path.join('test', 'test.html'), os.pardir),
@@ -144,47 +159,121 @@ class TestUtils(LoggedTestCase):
         for value, expected in samples:
             self.assertEqual(utils.get_relative_path(value), expected)
 
+    def test_truncate_html_words(self):
+        # Plain text.
+        self.assertEqual(
+            utils.truncate_html_words('short string', 20),
+            'short string')
+        self.assertEqual(
+            utils.truncate_html_words('word ' * 100, 20),
+            'word ' * 20 + '…')
+
+        # Words enclosed or intervaled by HTML tags.
+        self.assertEqual(
+            utils.truncate_html_words('<p>' + 'word ' * 100 + '</p>', 20),
+            '<p>' + 'word ' * 20 + '…</p>')
+        self.assertEqual(
+            utils.truncate_html_words(
+                '<span\nstyle="\n…\n">' + 'word ' * 100 + '</span>', 20),
+            '<span\nstyle="\n…\n">' + 'word ' * 20 + '…</span>')
+        self.assertEqual(
+            utils.truncate_html_words('<br>' + 'word ' * 100, 20),
+            '<br>' + 'word ' * 20 + '…')
+        self.assertEqual(
+            utils.truncate_html_words('<!-- comment -->' + 'word ' * 100, 20),
+            '<!-- comment -->' + 'word ' * 20 + '…')
+
+        # Words with hypens and apostrophes.
+        self.assertEqual(
+            utils.truncate_html_words("a-b " * 100, 20),
+            "a-b " * 20 + '…')
+        self.assertEqual(
+            utils.truncate_html_words("it's " * 100, 20),
+            "it's " * 20 + '…')
+
+        # Words with HTML entity references.
+        self.assertEqual(
+            utils.truncate_html_words("&eacute; " * 100, 20),
+            "&eacute; " * 20 + '…')
+        self.assertEqual(
+            utils.truncate_html_words("caf&eacute; " * 100, 20),
+            "caf&eacute; " * 20 + '…')
+        self.assertEqual(
+            utils.truncate_html_words("&egrave;lite " * 100, 20),
+            "&egrave;lite " * 20 + '…')
+        self.assertEqual(
+            utils.truncate_html_words("cafeti&eacute;re " * 100, 20),
+            "cafeti&eacute;re " * 20 + '…')
+        self.assertEqual(
+            utils.truncate_html_words("&int;dx " * 100, 20),
+            "&int;dx " * 20 + '…')
+
+        # Words with HTML character references inside and outside
+        # the ASCII range.
+        self.assertEqual(
+            utils.truncate_html_words("&#xe9; " * 100, 20),
+            "&#xe9; " * 20 + '…')
+        self.assertEqual(
+            utils.truncate_html_words("&#x222b;dx " * 100, 20),
+            "&#x222b;dx " * 20 + '…')
+
     def test_process_translations(self):
+        fr_articles = []
+        en_articles = []
+
         # create a bunch of articles
-        # 1: no translation metadata
-        fr_article1 = get_article(lang='fr', slug='yay', title='Un titre',
-                                  content='en français')
-        en_article1 = get_article(lang='en', slug='yay', title='A title',
-                                  content='in english')
-        # 2: reverse which one is the translation thanks to metadata
-        fr_article2 = get_article(lang='fr', slug='yay2', title='Un titre',
-                                  content='en français')
-        en_article2 = get_article(lang='en', slug='yay2', title='A title',
-                                  content='in english',
-                                  extra_metadata={'translation': 'true'})
+        # 0: no translation metadata
+        fr_articles.append(get_article(lang='fr', slug='yay0', title='Titre',
+                                       content='en français'))
+        en_articles.append(get_article(lang='en', slug='yay0', title='Title',
+                                       content='in english'))
+        # 1: translation metadata on default lang
+        fr_articles.append(get_article(lang='fr', slug='yay1', title='Titre',
+                                       content='en français'))
+        en_articles.append(get_article(lang='en', slug='yay1', title='Title',
+                                       content='in english',
+                                       extra_metadata={'translation': 'true'}))
+        # 2: translation metadata not on default lang
+        fr_articles.append(get_article(lang='fr', slug='yay2', title='Titre',
+                                       content='en français',
+                                       extra_metadata={'translation': 'true'}))
+        en_articles.append(get_article(lang='en', slug='yay2', title='Title',
+                                       content='in english'))
         # 3: back to default language detection if all items have the
         #    translation metadata
-        fr_article3 = get_article(lang='fr', slug='yay3', title='Un titre',
-                                  content='en français',
-                                  extra_metadata={'translation': 'yep'})
-        en_article3 = get_article(lang='en', slug='yay3', title='A title',
-                                  content='in english',
-                                  extra_metadata={'translation': 'yes'})
+        fr_articles.append(get_article(lang='fr', slug='yay3', title='Titre',
+                                       content='en français',
+                                       extra_metadata={'translation': 'yep'}))
+        en_articles.append(get_article(lang='en', slug='yay3', title='Title',
+                                       content='in english',
+                                       extra_metadata={'translation': 'yes'}))
 
-        articles = [fr_article1, en_article1, fr_article2, en_article2,
-                    fr_article3, en_article3]
+        # try adding articles in both orders
+        for lang0_articles, lang1_articles in ((fr_articles, en_articles),
+                                               (en_articles, fr_articles)):
+            articles = lang0_articles + lang1_articles
 
-        index, trans = utils.process_translations(articles)
+            index, trans = utils.process_translations(articles)
 
-        self.assertIn(en_article1, index)
-        self.assertIn(fr_article1, trans)
-        self.assertNotIn(en_article1, trans)
-        self.assertNotIn(fr_article1, index)
+            self.assertIn(en_articles[0], index)
+            self.assertIn(fr_articles[0], trans)
+            self.assertNotIn(en_articles[0], trans)
+            self.assertNotIn(fr_articles[0], index)
 
-        self.assertIn(fr_article2, index)
-        self.assertIn(en_article2, trans)
-        self.assertNotIn(fr_article2, trans)
-        self.assertNotIn(en_article2, index)
+            self.assertIn(fr_articles[1], index)
+            self.assertIn(en_articles[1], trans)
+            self.assertNotIn(fr_articles[1], trans)
+            self.assertNotIn(en_articles[1], index)
 
-        self.assertIn(en_article3, index)
-        self.assertIn(fr_article3, trans)
-        self.assertNotIn(en_article3, trans)
-        self.assertNotIn(fr_article3, index)
+            self.assertIn(en_articles[2], index)
+            self.assertIn(fr_articles[2], trans)
+            self.assertNotIn(en_articles[2], trans)
+            self.assertNotIn(fr_articles[2], index)
+
+            self.assertIn(en_articles[3], index)
+            self.assertIn(fr_articles[3], trans)
+            self.assertNotIn(en_articles[3], trans)
+            self.assertNotIn(fr_articles[3], index)
 
     def test_watchers(self):
         # Test if file changes are correctly detected
@@ -264,7 +353,9 @@ class TestUtils(LoggedTestCase):
         self.assertEqual(utils.strftime(d, '%d/%m/%Y'), '29/08/2012')
 
         # RFC 3339
-        self.assertEqual(utils.strftime(d, '%Y-%m-%dT%H:%M:%SZ'),'2012-08-29T00:00:00Z')
+        self.assertEqual(
+            utils.strftime(d, '%Y-%m-%dT%H:%M:%SZ'),
+            '2012-08-29T00:00:00Z')
 
         # % escaped
         self.assertEqual(utils.strftime(d, '%d%%%m%%%y'), '29%08%12')
@@ -280,8 +371,9 @@ class TestUtils(LoggedTestCase):
                          'Published in 29-08-2012')
 
         # with non-ascii text
-        self.assertEqual(utils.strftime(d, '%d/%m/%Y Øl trinken beim Besäufnis'),
-                         '29/08/2012 Øl trinken beim Besäufnis')
+        self.assertEqual(
+            utils.strftime(d, '%d/%m/%Y Øl trinken beim Besäufnis'),
+            '29/08/2012 Øl trinken beim Besäufnis')
 
         # alternative formatting options
         self.assertEqual(utils.strftime(d, '%-d/%-m/%y'), '29/8/12')
@@ -290,7 +382,6 @@ class TestUtils(LoggedTestCase):
         d = utils.SafeDatetime(2012, 8, 9)
         self.assertEqual(utils.strftime(d, '%-d/%-m/%y'), '9/8/12')
 
-
     # test the output of utils.strftime in a different locale
     # Turkish locale
     @unittest.skipUnless(locale_available('tr_TR.UTF-8') or
@@ -298,12 +389,12 @@ class TestUtils(LoggedTestCase):
                          'Turkish locale needed')
     def test_strftime_locale_dependent_turkish(self):
         # store current locale
-        old_locale = locale.setlocale(locale.LC_TIME)
+        old_locale = locale.setlocale(locale.LC_ALL)
 
         if platform == 'win32':
-            locale.setlocale(locale.LC_TIME, str('Turkish'))
+            locale.setlocale(locale.LC_ALL, str('Turkish'))
         else:
-            locale.setlocale(locale.LC_TIME, str('tr_TR.UTF-8'))
+            locale.setlocale(locale.LC_ALL, str('tr_TR.UTF-8'))
 
         d = utils.SafeDatetime(2012, 8, 29)
 
@@ -313,16 +404,17 @@ class TestUtils(LoggedTestCase):
                          'Çarşamba, 29 Ağustos 2012')
 
         # with text
-        self.assertEqual(utils.strftime(d, 'Yayınlanma tarihi: %A, %d %B %Y'),
+        self.assertEqual(
+            utils.strftime(d, 'Yayınlanma tarihi: %A, %d %B %Y'),
             'Yayınlanma tarihi: Çarşamba, 29 Ağustos 2012')
 
-        # non-ascii format candidate (someone might pass it... for some reason)
-        self.assertEqual(utils.strftime(d, '%Y yılında %üretim artışı'),
+        # non-ascii format candidate (someone might pass it… for some reason)
+        self.assertEqual(
+            utils.strftime(d, '%Y yılında %üretim artışı'),
             '2012 yılında %üretim artışı')
 
         # restore locale back
-        locale.setlocale(locale.LC_TIME, old_locale)
-
+        locale.setlocale(locale.LC_ALL, old_locale)
 
     # test the output of utils.strftime in a different locale
     # French locale
@@ -331,12 +423,12 @@ class TestUtils(LoggedTestCase):
                          'French locale needed')
     def test_strftime_locale_dependent_french(self):
         # store current locale
-        old_locale = locale.setlocale(locale.LC_TIME)
+        old_locale = locale.setlocale(locale.LC_ALL)
 
         if platform == 'win32':
-            locale.setlocale(locale.LC_TIME, str('French'))
+            locale.setlocale(locale.LC_ALL, str('French'))
         else:
-            locale.setlocale(locale.LC_TIME, str('fr_FR.UTF-8'))
+            locale.setlocale(locale.LC_ALL, str('fr_FR.UTF-8'))
 
         d = utils.SafeDatetime(2012, 8, 29)
 
@@ -347,15 +439,28 @@ class TestUtils(LoggedTestCase):
         self.assertTrue(utils.strftime(d, '%A') in ('mercredi', 'Mercredi'))
 
         # with text
-        self.assertEqual(utils.strftime(d, 'Écrit le %d %B %Y'),
+        self.assertEqual(
+            utils.strftime(d, 'Écrit le %d %B %Y'),
             'Écrit le 29 août 2012')
 
-        # non-ascii format candidate (someone might pass it... for some reason)
-        self.assertEqual(utils.strftime(d, '%écrits en %Y'),
+        # non-ascii format candidate (someone might pass it… for some reason)
+        self.assertEqual(
+            utils.strftime(d, '%écrits en %Y'),
             '%écrits en 2012')
 
         # restore locale back
-        locale.setlocale(locale.LC_TIME, old_locale)
+        locale.setlocale(locale.LC_ALL, old_locale)
+
+    def test_maybe_pluralize(self):
+        self.assertEqual(
+            utils.maybe_pluralize(0, 'Article', 'Articles'),
+            '0 Articles')
+        self.assertEqual(
+            utils.maybe_pluralize(1, 'Article', 'Articles'),
+            '1 Article')
+        self.assertEqual(
+            utils.maybe_pluralize(2, 'Article', 'Articles'),
+            '2 Articles')
 
 
 class TestCopy(unittest.TestCase):
@@ -403,8 +508,9 @@ class TestCopy(unittest.TestCase):
 
     def test_copy_file_create_dirs(self):
         self._create_file('a.txt')
-        utils.copy(os.path.join(self.root_dir, 'a.txt'),
-                   os.path.join(self.root_dir, 'b0', 'b1', 'b2', 'b3', 'b.txt'))
+        utils.copy(
+            os.path.join(self.root_dir, 'a.txt'),
+            os.path.join(self.root_dir, 'b0', 'b1', 'b2', 'b3', 'b.txt'))
         self._exist_dir('b0')
         self._exist_dir('b0', 'b1')
         self._exist_dir('b0', 'b1', 'b2')
@@ -459,41 +565,55 @@ class TestDateFormatter(unittest.TestCase):
             template_file.write('date = {{ date|strftime("%A, %d %B %Y") }}')
         self.date = utils.SafeDatetime(2012, 8, 29)
 
-
     def tearDown(self):
         shutil.rmtree(self.temp_content)
         shutil.rmtree(self.temp_output)
         # reset locale to default
         locale.setlocale(locale.LC_ALL, '')
 
-
     @unittest.skipUnless(locale_available('fr_FR.UTF-8') or
                          locale_available('French'),
                          'French locale needed')
     def test_french_strftime(self):
-        # This test tries to reproduce an issue that occurred with python3.3 under macos10 only
-        locale.setlocale(locale.LC_ALL, str('fr_FR.UTF-8'))
-        date = utils.SafeDatetime(2014,8,14)
-        # we compare the lower() dates since macos10 returns "Jeudi" for %A whereas linux reports "jeudi"
-        self.assertEqual( u'jeudi, 14 août 2014', utils.strftime(date, date_format="%A, %d %B %Y").lower() )
+        # This test tries to reproduce an issue that
+        # occurred with python3.3 under macos10 only
+        if platform == 'win32':
+            locale.setlocale(locale.LC_ALL, str('French'))
+        else:
+            locale.setlocale(locale.LC_ALL, str('fr_FR.UTF-8'))
+        date = utils.SafeDatetime(2014, 8, 14)
+        # we compare the lower() dates since macos10 returns
+        # "Jeudi" for %A whereas linux reports "jeudi"
+        self.assertEqual(
+            u'jeudi, 14 août 2014',
+            utils.strftime(date, date_format="%A, %d %B %Y").lower())
         df = utils.DateFormatter()
-        self.assertEqual( u'jeudi, 14 août 2014', df(date, date_format="%A, %d %B %Y").lower() )
+        self.assertEqual(
+            u'jeudi, 14 août 2014',
+            df(date, date_format="%A, %d %B %Y").lower())
         # Let us now set the global locale to C:
         locale.setlocale(locale.LC_ALL, str('C'))
-        # DateFormatter should still work as expected since it is the whole point of DateFormatter
+        # DateFormatter should still work as expected
+        # since it is the whole point of DateFormatter
         # (This is where pre-2014/4/15 code fails on macos10)
         df_date = df(date, date_format="%A, %d %B %Y").lower()
-        self.assertEqual( u'jeudi, 14 août 2014', df_date )
-
+        self.assertEqual(u'jeudi, 14 août 2014', df_date)
 
     @unittest.skipUnless(locale_available('fr_FR.UTF-8') or
                          locale_available('French'),
                          'French locale needed')
     def test_french_locale(self):
+        if platform == 'win32':
+            locale_string = 'French'
+        else:
+            locale_string = 'fr_FR.UTF-8'
         settings = read_settings(
-            override={'LOCALE': locale.normalize('fr_FR.UTF-8'),
-                      'TEMPLATE_PAGES': {'template/source.html':
-                                         'generated/file.html'}})
+            override={
+                'LOCALE': locale_string,
+                'TEMPLATE_PAGES': {
+                    'template/source.html': 'generated/file.html'
+                }
+            })
 
         generator = TemplatePagesGenerator(
             {'date': self.date}, settings,
@@ -504,7 +624,7 @@ class TestDateFormatter(unittest.TestCase):
         generator.generate_output(writer)
 
         output_path = os.path.join(
-                self.temp_output, 'generated', 'file.html')
+            self.temp_output, 'generated', 'file.html')
 
         # output file has been generated
         self.assertTrue(os.path.exists(output_path))
@@ -513,16 +633,22 @@ class TestDateFormatter(unittest.TestCase):
         with utils.pelican_open(output_path) as output_file:
             self.assertEqual(output_file,
                              utils.strftime(self.date, 'date = %A, %d %B %Y'))
-
 
     @unittest.skipUnless(locale_available('tr_TR.UTF-8') or
                          locale_available('Turkish'),
                          'Turkish locale needed')
     def test_turkish_locale(self):
+        if platform == 'win32':
+            locale_string = 'Turkish'
+        else:
+            locale_string = 'tr_TR.UTF-8'
         settings = read_settings(
-            override = {'LOCALE': locale.normalize('tr_TR.UTF-8'),
-                        'TEMPLATE_PAGES': {'template/source.html':
-                                           'generated/file.html'}})
+            override={
+                'LOCALE': locale_string,
+                'TEMPLATE_PAGES': {
+                    'template/source.html': 'generated/file.html'
+                }
+            })
 
         generator = TemplatePagesGenerator(
             {'date': self.date}, settings,
@@ -533,7 +659,7 @@ class TestDateFormatter(unittest.TestCase):
         generator.generate_output(writer)
 
         output_path = os.path.join(
-                self.temp_output, 'generated', 'file.html')
+            self.temp_output, 'generated', 'file.html')
 
         # output file has been generated
         self.assertTrue(os.path.exists(output_path))
@@ -542,3 +668,34 @@ class TestDateFormatter(unittest.TestCase):
         with utils.pelican_open(output_path) as output_file:
             self.assertEqual(output_file,
                              utils.strftime(self.date, 'date = %A, %d %B %Y'))
+
+
+class TestSanitisedJoin(unittest.TestCase):
+    def test_detect_parent_breakout(self):
+        with six.assertRaisesRegex(
+                self,
+                RuntimeError,
+                "Attempted to break out of output directory to /foo/test"):
+            utils.sanitised_join(
+                "/foo/bar",
+                "../test"
+            )
+
+    def test_detect_root_breakout(self):
+        with six.assertRaisesRegex(
+                self,
+                RuntimeError,
+                "Attempted to break out of output directory to /test"):
+            utils.sanitised_join(
+                "/foo/bar",
+                "/test"
+            )
+
+    def test_pass_deep_subpaths(self):
+        self.assertEqual(
+            utils.sanitised_join(
+                "/foo/bar",
+                "test"
+            ),
+            os.path.join("/foo/bar", "test")
+        )

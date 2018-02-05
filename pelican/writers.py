@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
-from __future__ import with_statement, unicode_literals, print_function
+from __future__ import print_function, unicode_literals, with_statement
+
+import logging
+import os
+
+from feedgenerator import Atom1Feed, Rss201rev2Feed, get_tag_uri
+
+from jinja2 import Markup
+
 import six
 
-import os
-import locale
-import logging
+from pelican import signals
+from pelican.paginator import Paginator
+from pelican.utils import (get_relative_path, is_selected_for_writing,
+                           path_to_url, sanitised_join, set_date_tzinfo)
 
 if not six.PY3:
     from codecs import open
-
-from feedgenerator import Atom1Feed, Rss201rev2Feed
-from jinja2 import Markup
-from six.moves.urllib.parse import urlparse
-
-from pelican.paginator import Paginator
-from pelican.utils import (get_relative_path, path_to_url, set_date_tzinfo,
-                           is_selected_for_writing)
-from pelican import signals
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +30,14 @@ class Writer(object):
         self._written_files = set()
         self._overridden_files = set()
 
-    def _create_new_feed(self, feed_type, context):
+    def _create_new_feed(self, feed_type, feed_title, context):
         feed_class = Rss201rev2Feed if feed_type == 'rss' else Atom1Feed
-        sitename = Markup(context['SITENAME']).striptags()
+        if feed_title:
+            feed_title = context['SITENAME'] + ' - ' + feed_title
+        else:
+            feed_title = context['SITENAME']
         feed = feed_class(
-            title=sitename,
+            title=Markup(feed_title).striptags(),
             link=(self.site_url + '/'),
             feed_url=self.feed_url,
             description=context.get('SITESUBTITLE', ''))
@@ -44,18 +47,24 @@ class Writer(object):
 
         title = Markup(item.title).striptags()
         link = '%s/%s' % (self.site_url, item.url)
+        is_rss = isinstance(feed, Rss201rev2Feed)
+        if not is_rss or self.settings.get('RSS_FEED_SUMMARY_ONLY'):
+            description = item.summary
+        else:
+            description = item.get_content(self.site_url)
         feed.add_item(
             title=title,
             link=link,
-            unique_id='tag:%s,%s:%s' % (urlparse(link).netloc,
-                                        item.date.date(),
-                                        urlparse(link).path.lstrip('/')),
-            description=item.get_content(self.site_url),
+            unique_id=get_tag_uri(link, item.date),
+            description=description,
+            content=item.get_content(self.site_url),
             categories=item.tags if hasattr(item, 'tags') else None,
             author_name=getattr(item, 'author', ''),
             pubdate=set_date_tzinfo(
-                item.modified if hasattr(item, 'modified') else item.date,
-                self.settings.get('TIMEZONE', None)))
+                item.date, self.settings.get('TIMEZONE', None)),
+            updateddate=set_date_tzinfo(
+                item.modified, self.settings.get('TIMEZONE', None)
+                ) if hasattr(item, 'modified') else None)
 
     def _open_w(self, filename, encoding, override=False):
         """Open a file to write some content to it.
@@ -80,7 +89,8 @@ class Writer(object):
         self._written_files.add(filename)
         return open(filename, 'w', encoding=encoding)
 
-    def write_feed(self, elements, context, path=None, feed_type='atom'):
+    def write_feed(self, elements, context, path=None, feed_type='atom',
+                   override_output=False, feed_title=None):
         """Generate a feed with the list of articles provided
 
         Return the feed. If no path or output_path is specified, just
@@ -90,6 +100,10 @@ class Writer(object):
         :param context: the context to get the feed metadata.
         :param path: the path to output.
         :param feed_type: the feed type to use (atom or rss)
+        :param override_output: boolean telling if we can override previous
+            output with the same name (and if next files written with the same
+            name should be skipped to keep that one)
+        :param feed_title: the title of the feed.o
         """
         if not is_selected_for_writing(self.settings, path):
             return
@@ -100,7 +114,7 @@ class Writer(object):
         self.feed_domain = context.get('FEED_DOMAIN')
         self.feed_url = '{}/{}'.format(self.feed_domain, path)
 
-        feed = self._create_new_feed(feed_type, context)
+        feed = self._create_new_feed(feed_type, feed_title, context)
 
         max_items = len(elements)
         if self.settings['FEED_MAX_ITEMS']:
@@ -108,21 +122,23 @@ class Writer(object):
         for i in range(max_items):
             self._add_item_to_the_feed(feed, elements[i])
 
+        signals.feed_generated.send(context, feed=feed)
         if path:
-            complete_path = os.path.join(self.output_path, path)
+            complete_path = sanitised_join(self.output_path, path)
+
             try:
                 os.makedirs(os.path.dirname(complete_path))
             except Exception:
                 pass
 
             encoding = 'utf-8' if six.PY3 else None
-            with self._open_w(complete_path, encoding) as fp:
+            with self._open_w(complete_path, encoding, override_output) as fp:
                 feed.write(fp, 'utf-8')
                 logger.info('Writing %s', complete_path)
 
-            signals.feed_written.send(complete_path, context=context, feed=feed)
+            signals.feed_written.send(
+                complete_path, context=context, feed=feed)
         return feed
-
 
     def write_file(self, name, template, context, relative_urls=False,
                    paginated=None, override_output=False, **kwargs):
@@ -140,9 +156,10 @@ class Writer(object):
         :param **kwargs: additional variables to pass to the templates
         """
 
-        if name is False or name == "" or\
-           not is_selected_for_writing(self.settings,\
-               os.path.join(self.output_path, name)):
+        if name is False or \
+           name == "" or \
+           not is_selected_for_writing(self.settings,
+                                       os.path.join(self.output_path, name)):
             return
         elif not name:
             # other stuff, just return for now
@@ -154,7 +171,8 @@ class Writer(object):
             if localcontext['localsiteurl']:
                 context['localsiteurl'] = localcontext['localsiteurl']
             output = template.render(localcontext)
-            path = os.path.join(output_path, name)
+            path = sanitised_join(output_path, name)
+
             try:
                 os.makedirs(os.path.dirname(path))
             except Exception:
@@ -170,7 +188,8 @@ class Writer(object):
 
         def _get_localcontext(context, name, kwargs, relative_urls):
             localcontext = context.copy()
-            localcontext['localsiteurl'] = localcontext.get('localsiteurl', None)
+            localcontext['localsiteurl'] = localcontext.get(
+                'localsiteurl', None)
             if relative_urls:
                 relative_url = path_to_url(get_relative_path(name))
                 localcontext['SITEURL'] = relative_url
@@ -202,11 +221,13 @@ class Writer(object):
                          '%s_previous_page' % key: previous_page,
                          '%s_next_page' % key: next_page})
 
-                localcontext = _get_localcontext(context, page.save_as, paginated_kwargs, relative_urls)
+                localcontext = _get_localcontext(
+                    context, page.save_as, paginated_kwargs, relative_urls)
                 _write_file(template, localcontext, self.output_path,
                             page.save_as, override_output)
         else:
             # no pagination
-            localcontext = _get_localcontext(context, name, kwargs, relative_urls)
+            localcontext = _get_localcontext(
+                context, name, kwargs, relative_urls)
             _write_file(template, localcontext, self.output_path, name,
                         override_output)

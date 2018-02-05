@@ -1,5 +1,5 @@
 Filing issues
--------------
+=============
 
 * Before you file an issue, try `asking for help`_ first.
 * If determined to file an issue, first check for `existing issues`_, including
@@ -9,12 +9,12 @@ Filing issues
 .. _`existing issues`: https://github.com/getpelican/pelican/issues
 
 How to get help
----------------
+===============
 
 Before you ask for help, please make sure you do the following:
 
 1. Read the documentation_ thoroughly. If in a hurry, at least use the search
-   field that is provided at top-right on the documentation_ pages. Make sure
+   field that is provided at top-left on the documentation_ pages. Make sure
    you read the docs for the Pelican version you are using.
 2. Use a search engine (e.g., DuckDuckGo, Google) to search for a solution to
    your problem. Someone may have already found a solution, perhaps in the
@@ -66,7 +66,7 @@ Once the above preparation is ready, you can contact people willing to help via
 Remember to include all the information you prepared.
 
 The #pelican IRC channel
-........................
+------------------------
 
 * Because of differing time zones, you may not get an immediate response to your
   question, but please be patient and stay logged into IRC — someone will almost
@@ -81,7 +81,7 @@ The #pelican IRC channel
 
 
 Contributing code
------------------
+=================
 
 Before you submit a contribution, please ask whether it is desired so that you
 don't spend a lot of time working on something that would be rejected for a
@@ -89,7 +89,7 @@ known reason. Consider also whether your new feature might be better suited as
 a plugin_ — you can `ask for help`_  to make that determination.
 
 Using Git and GitHub
-....................
+--------------------
 
 * `Create a new git branch`_ specific to your change (as opposed to making
   your commits in the master branch).
@@ -116,14 +116,14 @@ Using Git and GitHub
   turn your GitHub issue into a pull request containing your code.
 
 Contribution quality standards
-..............................
+------------------------------
 
 * Adhere to `PEP8 coding standards`_ whenever possible. This can be eased via
   the `pep8 <http://pypi.python.org/pypi/pep8>`_ or `flake8
   <http://pypi.python.org/pypi/flake8/>`_ tools, the latter of which in
   particular will give you some useful hints about ways in which the
   code/formatting can be improved.
-* Make sure your code is compatible with Python 2.7, 3.3, and 3.4 — see our
+* Ensure your code is compatible with the latest Python 2.7 and 3.x releases — see our
   `compatibility cheatsheet`_ for more details.
 * Add docs and tests for your changes. Undocumented and untested features will
   not be accepted.

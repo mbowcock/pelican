@@ -1,13 +1,17 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals, print_function
+from __future__ import print_function, unicode_literals
+
+import re
 
 from docutils import nodes, utils
-from docutils.parsers.rst import directives, roles, Directive
-from pygments.formatters import HtmlFormatter
+from docutils.parsers.rst import Directive, directives, roles
+
 from pygments import highlight
-from pygments.lexers import get_lexer_by_name, TextLexer
-import re
+from pygments.formatters import HtmlFormatter
+from pygments.lexers import TextLexer, get_lexer_by_name
+
 import six
+
 import pelican.settings as pys
 
 
@@ -66,11 +70,12 @@ class Pygments(Directive):
         parsed = highlight('\n'.join(self.content), lexer, formatter)
         return [nodes.raw('', parsed, format='html')]
 
+
 directives.register_directive('code-block', Pygments)
 directives.register_directive('sourcecode', Pygments)
 
 
-_abbr_re = re.compile('\((.*)\)$')
+_abbr_re = re.compile(r'\((.*)\)$', re.DOTALL)
 
 
 class abbreviation(nodes.Inline, nodes.TextElement):
@@ -85,5 +90,6 @@ def abbr_role(typ, rawtext, text, lineno, inliner, options={}, content=[]):
     abbr = text[:m.start()].strip()
     expl = m.group(1)
     return [abbreviation(abbr, abbr, explanation=expl)], []
+
 
 roles.register_local_role('abbr', abbr_role)

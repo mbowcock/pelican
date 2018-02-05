@@ -1,24 +1,25 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals, print_function
-__all__ = ['get_article', 'unittest', ]
+from __future__ import print_function, unicode_literals
 
+import locale
+import logging
 import os
 import re
 import subprocess
 import sys
-from six import StringIO
-import logging
-from logging.handlers import BufferingHandler
 import unittest
-import locale
-
-from functools import wraps
 from contextlib import contextmanager
-from tempfile import mkdtemp
+from functools import wraps
+from logging.handlers import BufferingHandler
 from shutil import rmtree
+from tempfile import mkdtemp
+
+from six import StringIO
 
 from pelican.contents import Article
 from pelican.settings import DEFAULT_CONFIG
+
+__all__ = ['get_article', 'unittest', ]
 
 
 @contextmanager
@@ -54,11 +55,11 @@ def isplit(s, sep=None):
 
     """
     sep, hardsep = r'\s+' if sep is None else re.escape(sep), sep is not None
-    exp, pos, l = re.compile(sep), 0, len(s)
+    exp, pos, length = re.compile(sep), 0, len(s)
     while True:
         m = exp.search(s, pos)
         if not m:
-            if pos < l or hardsep:
+            if pos < length or hardsep:
                 #      ^ mimic "split()": ''.split() returns []
                 yield s[pos:]
             break
@@ -167,7 +168,7 @@ def get_settings(**kwargs):
     Set keyword arguments to override specific settings.
     """
     settings = DEFAULT_CONFIG.copy()
-    for key,value in kwargs.items():
+    for key, value in kwargs.items():
         settings[key] = value
     return settings
 
@@ -179,10 +180,13 @@ class LogCountHandler(BufferingHandler):
         logging.handlers.BufferingHandler.__init__(self, capacity)
 
     def count_logs(self, msg=None, level=None):
-        return len([l for l in self.buffer
-            if (msg is None or re.match(msg, l.getMessage()))
-            and (level is None or l.levelno == level)
-            ])
+        return len([
+            l
+            for l
+            in self.buffer
+            if (msg is None or re.match(msg, l.getMessage())) and
+               (level is None or l.levelno == level)
+        ])
 
 
 class LoggedTestCase(unittest.TestCase):

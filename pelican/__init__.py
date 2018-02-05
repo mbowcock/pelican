@@ -1,44 +1,41 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals, print_function
-import six
+from __future__ import print_function, unicode_literals
 
+import argparse
+import collections
+import locale
+import logging
 import os
 import re
 import sys
 import time
-import logging
-import argparse
-import locale
-import collections
+
+import six
 
 # pelican.log has to be the first pelican module to be loaded
 # because logging.setLoggerClass has to be called before logging.getLogger
 from pelican.log import init
-
-from pelican import signals
-
+from pelican import signals  # noqa
 from pelican.generators import (ArticlesGenerator, PagesGenerator,
-                                StaticGenerator, SourceFileGenerator,
+                                SourceFileGenerator, StaticGenerator,
                                 TemplatePagesGenerator)
 from pelican.readers import Readers
 from pelican.settings import read_settings
-from pelican.utils import clean_output_dir, folder_watcher, file_watcher
+from pelican.utils import (clean_output_dir, file_watcher,
+                           folder_watcher, maybe_pluralize)
 from pelican.writers import Writer
 
-__version__ = "3.5.0"
-
+__version__ = "3.7.2.dev0"
 DEFAULT_CONFIG_NAME = 'pelicanconf.py'
-
-
 logger = logging.getLogger(__name__)
 
 
 class Pelican(object):
 
     def __init__(self, settings):
-        """
-        Pelican initialisation, performs some checks on the environment before
-        doing anything else.
+        """Pelican initialisation
+
+        Performs some checks on the environment before doing anything else.
         """
 
         # define the default settings
@@ -101,6 +98,11 @@ class Pelican(object):
                             'PAGE_LANG_URL'):
                 logger.warning("%s = '%s'", setting, self.settings[setting])
 
+        if self.settings.get('AUTORELOAD_IGNORE_CACHE'):
+            logger.warning('Found deprecated `AUTORELOAD_IGNORE_CACHE` in '
+                           'settings. Use --ignore-cache instead.')
+            self.settings.pop('AUTORELOAD_IGNORE_CACHE')
+
         if self.settings.get('ARTICLE_PERMALINK_STRUCTURE', False):
             logger.warning('Found deprecated `ARTICLE_PERMALINK_STRUCTURE` in'
                            ' settings.  Modifying the following settings for'
@@ -109,10 +111,10 @@ class Pelican(object):
             structure = self.settings['ARTICLE_PERMALINK_STRUCTURE']
 
             # Convert %(variable) into {variable}.
-            structure = re.sub('%\((\w+)\)s', '{\g<1>}', structure)
+            structure = re.sub(r'%\((\w+)\)s', r'{\g<1>}', structure)
 
             # Convert %x into {date:%x} for strftime
-            structure = re.sub('(%[A-z])', '{date:\g<1>}', structure)
+            structure = re.sub(r'(%[A-z])', r'{date:\g<1>}', structure)
 
             # Strip a / prefix
             structure = re.sub('^/', '', structure)
@@ -146,7 +148,7 @@ class Pelican(object):
         context = self.settings.copy()
         # Share these among all the generators and content objects:
         context['filenames'] = {}  # maps source path to Content object or None
-        context['localsiteurl'] = self.settings['SITEURL'] 
+        context['localsiteurl'] = self.settings['SITEURL']
 
         generators = [
             cls(
@@ -168,6 +170,8 @@ class Pelican(object):
             if hasattr(p, 'generate_context'):
                 p.generate_context()
 
+        signals.all_generators_finalized.send(generators)
+
         writer = self.get_writer()
 
         for p in generators:
@@ -181,12 +185,32 @@ class Pelican(object):
         pages_generator = next(g for g in generators
                                if isinstance(g, PagesGenerator))
 
-        print('Done: Processed {} article(s), {} draft(s) and {} page(s) in ' \
-              '{:.2f} seconds.'.format(
-            len(articles_generator.articles) + len(articles_generator.translations),
-            len(articles_generator.drafts) + \
-            len(articles_generator.drafts_translations),
-            len(pages_generator.pages) + len(pages_generator.translations),
+        pluralized_articles = maybe_pluralize(
+            (len(articles_generator.articles) +
+             len(articles_generator.translations)),
+            'article',
+            'articles')
+        pluralized_drafts = maybe_pluralize(
+            (len(articles_generator.drafts) +
+             len(articles_generator.drafts_translations)),
+            'draft',
+            'drafts')
+        pluralized_pages = maybe_pluralize(
+            (len(pages_generator.pages) +
+             len(pages_generator.translations)),
+            'page',
+            'pages')
+        pluralized_hidden_pages = maybe_pluralize(
+            (len(pages_generator.hidden_pages) +
+             len(pages_generator.hidden_translations)),
+            'hidden page',
+            'hidden pages')
+
+        print('Done: Processed {}, {}, {} and {} in {:.2f} seconds.'.format(
+            pluralized_articles,
+            pluralized_drafts,
+            pluralized_pages,
+            pluralized_hidden_pages,
             time.time() - start_time))
 
     def get_generator_classes(self):
@@ -215,8 +239,8 @@ class Pelican(object):
         return generators
 
     def get_writer(self):
-        writers = [ w for (_, w) in signals.get_writer.send(self)
-                    if isinstance(w, type) ]
+        writers = [w for (_, w) in signals.get_writer.send(self)
+                   if isinstance(w, type)]
         writers_found = len(writers)
         if writers_found == 0:
             return Writer(self.output_path, settings=self.settings)
@@ -226,15 +250,15 @@ class Pelican(object):
                 logger.debug('Found writer: %s', writer)
             else:
                 logger.warning(
-                    '%s writers found, using only first one: %s', 
+                    '%s writers found, using only first one: %s',
                     writers_found, writer)
             return writer(self.output_path, settings=self.settings)
 
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="""A tool to generate a static blog,
-        with restructured text input files.""",
+        description='A tool to generate a static blog, '
+                    ' with restructured text input files.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
@@ -281,6 +305,11 @@ def parse_arguments():
                         help='Relaunch pelican each time a modification occurs'
                         ' on the content files.')
 
+    parser.add_argument('--relative-urls', dest='relative_paths',
+                        action='store_true',
+                        help='Use relative urls in output, '
+                             'useful for site development')
+
     parser.add_argument('--cache-path', dest='cache_path',
                         help=('Directory in which to store cache files. '
                               'If not specified, defaults to "cache".'))
@@ -292,6 +321,11 @@ def parse_arguments():
     parser.add_argument('-w', '--write-selected', type=str,
                         dest='selected_paths', default=None,
                         help='Comma separated list of selected paths to write')
+
+    parser.add_argument('--fatal', metavar='errors|warnings',
+                        choices=('errors', 'warnings'), default='',
+                        help=('Exit the program with non-zero status if any '
+                              'errors/warnings encountered.'))
 
     return parser.parse_args()
 
@@ -314,12 +348,14 @@ def get_config(args):
         config['CACHE_PATH'] = args.cache_path
     if args.selected_paths:
         config['WRITE_SELECTED'] = args.selected_paths.split(',')
+    if args.relative_paths:
+        config['RELATIVE_URLS'] = args.relative_paths
     config['DEBUG'] = args.verbosity == logging.DEBUG
 
     # argparse returns bytes in Py2. There is no definite answer as to which
     # encoding argparse (or sys.argv) uses.
     # "Best" option seems to be locale.getpreferredencoding()
-    # ref: http://mail.python.org/pipermail/python-list/2006-October/405766.html
+    # http://mail.python.org/pipermail/python-list/2006-October/405766.html
     if not six.PY3:
         enc = locale.getpreferredencoding()
         for key in config:
@@ -333,6 +369,7 @@ def get_instance(args):
     config_file = args.settings
     if config_file is None and os.path.isfile(DEFAULT_CONFIG_NAME):
             config_file = DEFAULT_CONFIG_NAME
+            args.settings = DEFAULT_CONFIG_NAME
 
     settings = read_settings(config_file, override=get_config(args))
 
@@ -347,29 +384,35 @@ def get_instance(args):
 
 def main():
     args = parse_arguments()
-    init(args.verbosity)
-    pelican, settings = get_instance(args)
-    readers = Readers(settings)
+    init(args.verbosity, args.fatal)
 
-    watchers = {'content': folder_watcher(pelican.path,
-                                          readers.extensions,
-                                          pelican.ignore_files),
-                'theme': folder_watcher(pelican.theme,
-                                        [''],
-                                        pelican.ignore_files),
-                'settings': file_watcher(args.settings)}
-
-    for static_path in settings.get("STATIC_PATHS", []):
-        watchers[static_path] = folder_watcher(static_path, [''], pelican.ignore_files)
+    logger.debug('Pelican version: %s', __version__)
+    logger.debug('Python version: %s', sys.version.split()[0])
 
     try:
+        pelican, settings = get_instance(args)
+        readers = Readers(settings)
+
+        watchers = {'content': folder_watcher(pelican.path,
+                                              readers.extensions,
+                                              pelican.ignore_files),
+                    'theme': folder_watcher(pelican.theme,
+                                            [''],
+                                            pelican.ignore_files),
+                    'settings': file_watcher(args.settings)}
+
+        old_static = settings.get("STATIC_PATHS", [])
+        for static_path in old_static:
+            # use a prefix to avoid possible overriding of standard watchers
+            # above
+            watchers['[static]%s' % static_path] = folder_watcher(
+                os.path.join(pelican.path, static_path),
+                [''],
+                pelican.ignore_files)
+
         if args.autoreload:
             print('  --- AutoReload Mode: Monitoring `content`, `theme` and'
                   ' `settings` for changes. ---')
-
-            def _ignore_cache(pelican_obj):
-                if pelican_obj.settings['AUTORELOAD_IGNORE_CACHE']:
-                    pelican_obj.settings['LOAD_CONTENT_CACHE'] = False
 
             while True:
                 try:
@@ -379,12 +422,34 @@ def main():
                     # have changed, no matter what extension the filenames
                     # have.
                     modified = {k: next(v) for k, v in watchers.items()}
-                    original_load_cache = settings['LOAD_CONTENT_CACHE']
 
                     if modified['settings']:
                         pelican, settings = get_instance(args)
-                        original_load_cache = settings['LOAD_CONTENT_CACHE']
-                        _ignore_cache(pelican)
+
+                        # Adjust static watchers if there are any changes
+                        new_static = settings.get("STATIC_PATHS", [])
+
+                        # Added static paths
+                        # Add new watchers and set them as modified
+                        new_watchers = set(new_static).difference(old_static)
+                        for static_path in new_watchers:
+                            static_key = '[static]%s' % static_path
+                            watchers[static_key] = folder_watcher(
+                                os.path.join(pelican.path, static_path),
+                                [''],
+                                pelican.ignore_files)
+                            modified[static_key] = next(watchers[static_key])
+
+                        # Removed static paths
+                        # Remove watchers and modified values
+                        old_watchers = set(old_static).difference(new_static)
+                        for static_path in old_watchers:
+                            static_key = '[static]%s' % static_path
+                            watchers.pop(static_key)
+                            modified.pop(static_key)
+
+                        # Replace old_static with the new one
+                        old_static = new_static
 
                     if any(modified.values()):
                         print('\n-> Modified: {}. re-generating...'.format(
@@ -398,8 +463,6 @@ def main():
                                            'theme.')
 
                         pelican.run()
-                        # restore original caching policy
-                        pelican.settings['LOAD_CONTENT_CACHE'] = original_load_cache
 
                 except KeyboardInterrupt:
                     logger.warning("Keyboard interrupt, quitting.")
@@ -407,7 +470,6 @@ def main():
 
                 except Exception as e:
                     if (args.verbosity == logging.DEBUG):
-                        logger.critical(e.args)
                         raise
                     logger.warning(
                         'Caught exception "%s". Reloading.', e)
